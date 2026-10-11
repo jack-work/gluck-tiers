@@ -18,6 +18,17 @@ URL_KEYS = ("img_url", "image_url", "src")
 LINK_KEYS = ("link", "url", "href")
 
 DEFAULT_TIERS = ["S", "A", "B", "C", "D", "F"]
+BOM = "\ufeff"
+
+
+def _strip_bom(text):
+    """A byte-order mark on the first line is invisible and changes meaning.
+
+    Without this, "# Title" preceded by a BOM stops matching the title rule
+    and becomes a CARD named "\ufeff# Title", while the title silently falls
+    back to Untitled. A wrong answer with no error is worse than a refusal.
+    """
+    return text[1:] if text.startswith(BOM) else text
 
 
 class InputError(ValueError):
@@ -74,6 +85,7 @@ def _item(raw, seen):
 
 
 def parse_json(text):
+    text = _strip_bom(text)
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
@@ -86,11 +98,13 @@ def parse_json(text):
         "source": data.get("source"),
         "tiers": list(data.get("tiers") or DEFAULT_TIERS),
         "items": [_item(i, seen) for i in data["items"]],
+        "warnings": [],
     }
 
 
 def parse_lines(text):
     """The hand-written shape. Field count decides meaning."""
+    text = _strip_bom(text)
     title, tiers, split_on, rows = None, None, None, []
     for line in text.splitlines():
         line = line.strip()
@@ -108,9 +122,15 @@ def parse_lines(text):
             continue
         rows.append(line)
 
-    seen, items = set(), []
-    for row in rows:
+    seen, items, warnings = set(), [], []
+    for lineno, row in enumerate(rows, 1):
         fields = [f.strip() for f in row.split("|")]
+        if not fields[0]:
+            # A hand-written file will contain a stray separator. Dropping 71
+            # good rows over one is the wrong trade, so this is tolerated and
+            # counted. It is never silent: the count reaches /api/status.
+            warnings.append(f"row {lineno} has no name, skipped: {row!r}")
+            continue
         raw = {}
         if len(fields) >= 3:
             raw = {"name": fields[0], "sub": fields[1], "img": fields[2]}
@@ -135,29 +155,38 @@ def parse_lines(text):
         "source": None,
         "tiers": tiers or DEFAULT_TIERS,
         "items": items,
+        "warnings": warnings,
     }
 
 
 def parse_csv(text):
-    reader = csv.DictReader(io.StringIO(text))
+    reader = csv.DictReader(io.StringIO(_strip_bom(text)))
     if not reader.fieldnames:
         raise InputError("CSV has no header row")
     lowered = {f.lower().strip(): f for f in reader.fieldnames if f}
     if not any(k in lowered for k in NAME_KEYS):
         raise InputError(f"CSV header names no name column: {reader.fieldnames}")
-    seen, items = set(), []
-    for row in reader:
+    seen, items, warnings = set(), [], []
+    for lineno, row in enumerate(reader, 2):
         raw = {k: row[v] for k, v in lowered.items() if row.get(v) not in (None, "")}
         if not any(k in raw for k in NAME_KEYS):
+            warnings.append(f"line {lineno} has no name, skipped")
             continue
         items.append(_item(raw, seen))
     if not items:
         raise InputError("CSV had a header and no rows")
-    return {"title": "Untitled", "source": None, "tiers": DEFAULT_TIERS, "items": items}
+    return {
+        "title": "Untitled",
+        "source": None,
+        "tiers": DEFAULT_TIERS,
+        "items": items,
+        "warnings": warnings,
+    }
 
 
 def parse(text, hint=None):
     """Sniff the shape. hint is a filename suffix when one is known."""
+    text = _strip_bom(text)
     stripped = text.lstrip()
     if stripped.startswith(("{", "[")):
         return parse_json(text)

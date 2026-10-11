@@ -117,6 +117,27 @@ expect_raises(
     lambda: parse.parse_json('{"items":[{"sub":"MGMT"}]}'),
 )
 
+# ── what a hand-written file actually looks like ─────────────────────
+# Three defects were found here, and the first was SILENT: with a byte-order
+# mark the title line became a card and the title fell back to Untitled.
+m2 = parse.parse(read("messy.txt"))
+check("messy: BOM does not swallow the title", m2["title"] == "Breakfast, Ranked")
+check("messy: BOM does not become a card", not any(i["name"].startswith("\ufeff") for i in m2["items"]))
+check("messy: CRLF endings survive", all("\r" not in i["name"] for i in m2["items"]))
+check("messy: uppercase TIERS with spaces", m2["tiers"] == ["S", "A", "B", "C"])
+check("messy: one stray separator did not kill the file", len(m2["items"]) == 5)
+check("messy: the stray row is counted, not silent", len(m2["warnings"]) == 1)
+check("messy: and the warning names the row", "row 3" in m2["warnings"][0])
+check("messy: a trailing pipe yields no empty sub", m2["items"][3]["sub"] is None)
+check("messy: two fields, second not an image, becomes a sub", m2["items"][0]["sub"] == "the whole plate")
+check("messy: two fields, second an image, stays an image", m2["items"][2]["img"].endswith("huevos.jpg"))
+check("messy: three fields fill all of name, sub and image", m2["items"][4]["sub"] == "Levantine")
+check("messy: a later # line is a comment, not a card", not any(i["name"].startswith("#") for i in m2["items"]))
+
+bomcsv = parse.parse("\ufeffname,artist\nReuben,Deli\n")
+check("csv: BOM on the header does not hide the name column", bomcsv["items"][0]["name"] == "Reuben")
+check("every result carries a warnings key", "warnings" in d and "warnings" in t and "warnings" in c)
+
 # A check that cannot fail is not a check: prove the harness itself fails.
 try:
     check("harness: deliberately false", False)

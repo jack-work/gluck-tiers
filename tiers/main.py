@@ -85,6 +85,8 @@ def load_list(slug):
     items, errors = images().ingest_list(parsed["items"], s3=s3)
     for e in errors:
         log.error("image unresolved id=%s source=%s: %s", e["id"], e["source"], e["error"])
+    for w in parsed.get("warnings", []):
+        log.warning("input %s: %s", key, w)
     entry = {
         "slug": slug,
         "etag": tag,
@@ -92,6 +94,7 @@ def load_list(slug):
         "tiers": parsed["tiers"],
         "items": [{k: i[k] for k in ("id", "name", "sub", "img")} for i in items],
         "errors": errors,
+        "warnings": parsed.get("warnings", []),
     }
     with _lock:
         _cache[slug] = entry
@@ -196,7 +199,13 @@ def status():
         return jsonify(error="no identity on the request"), 401
     lists = {}
     for slug, entry in _cache.items():
-        lists[slug] = {"items": len(entry["items"]), "image_errors": len(entry["errors"])}
+        lists[slug] = {
+            "items": len(entry["items"]),
+            "image_errors": len(entry["errors"]),
+            # A tolerated row is still a row nobody read. Counted here so
+            # tolerance never becomes silence.
+            "input_warnings": entry.get("warnings", []),
+        }
     return jsonify(
         admin=ADMIN_GROUP in groups,
         mirrored=len(list(images().dir.glob("*.*"))),
