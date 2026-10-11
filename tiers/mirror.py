@@ -8,9 +8,13 @@ Two rules from doc/cards.md:
 
 import configparser
 import hashlib
+import ipaddress
 import json
 import os
 import pathlib
+import socket
+import urllib.error
+import urllib.parse
 import urllib.request
 
 import boto3
@@ -30,6 +34,15 @@ EXT_BY_MAGIC = [
 
 class MissingObject(Exception):
     """A key or URL named by the input resolved to nothing."""
+
+
+class BlockedAddress(Exception):
+    """A url resolved somewhere this process must never fetch.
+
+    spain is the house router. Loopback there holds Garage on 3900, Authelia
+    on 9091 and lldap on 17170, so a fetch of an attacker-named url is an SSRF
+    with the whole estate behind it.
+    """
 
 
 class CredentialError(Exception):
@@ -116,6 +129,46 @@ def get_object(key, s3=None):
         raise
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect is a second url, and the second one was never checked.
+
+    Validating the first host and then following a 302 to 127.0.0.1 is the
+    classic way an SSRF guard is defeated, so redirects are refused outright.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise BlockedAddress(f"redirect refused: {req.full_url} -> {newurl}")
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
+def assert_fetchable(url):
+    """Refuse anything that is not public http(s). Raises BlockedAddress."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise BlockedAddress(f"scheme not allowed: {parts.scheme or 'none'}")
+    host = parts.hostname
+    if not host:
+        raise BlockedAddress(f"no host in url: {url!r}")
+    try:
+        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
+    except socket.gaierror as e:
+        raise BlockedAddress(f"{host} does not resolve: {e}") from e
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (
+            ip.is_loopback
+            or ip.is_private
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise BlockedAddress(f"{host} resolves to {ip}, which is not public")
+    return True
+
+
 def _ext(blob):
     for magic, ext in EXT_BY_MAGIC:
         if blob.startswith(magic):
@@ -153,11 +206,16 @@ class Mirror:
             return p
         return None
 
-    def ingest(self, source, s3=None, timeout=15):
+    MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+    def ingest(self, source, s3=None, timeout=15, allow_remote=True):
         """Return the sha256 for one image source, fetching it at most once.
 
-        source is a bucket key or an http(s) URL. Dedup is on the source first,
-        then on the bytes, because 72 tracks share 61 covers.
+        allow_remote is the PROVENANCE of the input, not a property of the
+        url. A bucket object is admin-controlled, so a remote fetch is
+        intended: it is how the browser never touches Spotify's CDN. An
+        IMPORTED file is user-supplied, so no fetch may happen at all, and an
+        image resolves only if its bytes are already mirrored. doc/imports.md.
         """
         if not source:
             return None
@@ -167,12 +225,23 @@ class Mirror:
                 return sha
 
         if source.startswith(("http://", "https://")):
+            if not allow_remote:
+                raise MissingObject(
+                    f"remote images are not fetched for imported lists: {source}"
+                )
+            assert_fetchable(source)
             req = urllib.request.Request(source, headers={"User-Agent": "gluck-tiers"})
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    blob = r.read()
+                with _OPENER.open(req, timeout=timeout) as r:
+                    blob = r.read(self.MAX_IMAGE_BYTES + 1)
+            except BlockedAddress:
+                raise
             except Exception as e:
                 raise MissingObject(f"{source} could not be fetched: {e}") from e
+            if len(blob) > self.MAX_IMAGE_BYTES:
+                raise MissingObject(
+                    f"{source} exceeds {self.MAX_IMAGE_BYTES} bytes, refused"
+                )
         else:
             blob = get_object(source, s3=s3)
 
@@ -189,7 +258,7 @@ class Mirror:
         self._save_index()
         return sha
 
-    def ingest_list(self, items, s3=None):
+    def ingest_list(self, items, s3=None, allow_remote=True):
         """Mirror every image in a parsed list.
 
         Returns (items, errors). An item whose image cannot be resolved gets
@@ -206,9 +275,9 @@ class Mirror:
             card["img"] = None
             if source:
                 try:
-                    sha = self.ingest(source, s3=s3)
+                    sha = self.ingest(source, s3=s3, allow_remote=allow_remote)
                     card["img"] = f"/img/{sha}" if sha else None
-                except MissingObject as e:
+                except (MissingObject, BlockedAddress) as e:
                     errors.append({"id": card.get("id"), "source": source, "error": str(e)})
             out.append(card)
         return out, errors

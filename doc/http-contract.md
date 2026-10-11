@@ -101,3 +101,45 @@ the lister under the user's own grant, never through the service key.
 An imported list is addressable only as the browser's current state. It gets no
 slug and no URL, because a URL that only works in one browser session is worse
 than no URL.
+
+## The default list, stated rather than discovered
+
+`/` redirects, 302, and what it redirects to is decided in one place:
+
+| condition | default |
+|---|---|
+| `TIERS_DEFAULT_SLUG` is set | that slug, **verbatim** |
+| otherwise | the **alphabetically first** slug in the inventory |
+| no lists at all | 503 naming the reason, never a redirect loop |
+| the bucket is unreachable | 503 naming the error |
+
+An explicit default is used verbatim even when no such list exists, so a typo
+produces a 404 naming the slug instead of silently serving a different list.
+Alphabetical order is chosen because it is stable across listings; directory
+order is not.
+
+`/l/<slug>` serves the **same document** for every list. The slug lives in the
+URL and the inlined script reads it from there, so there is no template per
+list. The document is a shell and is not the authority on whether a list
+exists: `/api/list/<slug>` is. When the bucket is reachable an unknown slug is
+refused at `/l/` as a courtesy; when it is not, the shell is served and the API
+reports the truth. Serving a shell is never wrong, but claiming a list exists
+would be.
+
+## Origin, on every state-changing route
+
+`PUT /api/save/<slug>` requires an `Origin` header matching the request's host.
+
+The session is a cookie, so without this a cross-site request carries Gluck's
+identity for free. This was live until 2026-10-10: a grep for `Origin`,
+`Referer` or `CSRF` returned nothing.
+
+| request | result |
+|---|---|
+| `Origin` matching the host | proceeds |
+| `Origin` from anywhere else | 403 naming the origin |
+| **no `Origin` at all** | 403 |
+
+Refusing an absent `Origin` is a deliberate choice, not an oversight. Browsers
+send it on every non-GET fetch, so absence means a non-browser caller, and this
+service has none. Reads are exempt because they change nothing.

@@ -9,8 +9,9 @@ import logging
 import os
 import pathlib
 import threading
+from urllib.parse import urlsplit
 
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, Response, jsonify, redirect, request, send_file
 
 import mirror
 import parse
@@ -83,6 +84,24 @@ def identity():
     user = request.headers.get("Remote-User")
     groups = [g.strip() for g in (request.headers.get("Remote-Groups") or "").split(",") if g.strip()]
     return user, groups
+
+
+def same_origin():
+    """Refuse a state-changing request that did not come from this site.
+
+    The session is a cookie, so without this a cross-site request carries
+    Gluck's identity for free. Browsers send Origin on every non-GET fetch, so
+    its ABSENCE means a non-browser caller, and this service has none: refusing
+    is the explicit choice rather than an oversight. doc/http-contract.md.
+    """
+    origin = request.headers.get("Origin")
+    if not origin:
+        return jsonify(error="Origin header is required on a state-changing request"), 403
+    got = urlsplit(origin).netloc
+    if got != request.host:
+        log.warning("cross-origin write refused: Origin %s, Host %s", got, request.host)
+        return jsonify(error=f"origin {got} is not {request.host}"), 403
+    return None
 
 
 def require_user():
@@ -167,18 +186,84 @@ def load_list(slug):
     return entry
 
 
-@app.get("/")
-def board():
-    user, _, err = require_user()
-    if err:
-        return err
+def default_slug(inv=None):
+    """Which list / lands on, decided deterministically.
+
+    TIERS_DEFAULT_SLUG wins when set, and is used VERBATIM even if no such
+    list exists, so a typo becomes a 404 naming the slug rather than a
+    silent fallback to a different list. Otherwise the alphabetically first
+    slug, which is stable across listings; directory order is not.
+    """
+    explicit = os.environ.get("TIERS_DEFAULT_SLUG", "").strip()
+    if explicit:
+        return explicit
+    inv = inventory() if inv is None else inv
+    return sorted(inv)[0] if inv else None
+
+
+def _board_page():
     page = TEMPLATES / "board.html"
     if not page.exists():
-        return Response(
+        return None, Response(
             "board template not built: www/board.html.in has not landed yet",
             status=503,
             mimetype="text/plain",
         )
+    return page, None
+
+
+@app.get("/")
+def root():
+    """A 302, because this URL is already in Gluck's phone. A url that stops
+    working is a bug regardless of what replaced it."""
+    user, _, err = require_user()
+    if err:
+        return err
+    explicit = os.environ.get("TIERS_DEFAULT_SLUG", "").strip()
+    if explicit:
+        # No bucket round trip when the default is stated, which is what lets
+        # the asset check run inside a build sandbox that has no network.
+        return redirect(f"/l/{explicit}", code=302)
+    try:
+        slug = default_slug()
+    except Exception as e:
+        log.error("cannot reach the bucket to choose a default list: %s", e)
+        return Response(
+            f"cannot reach the bucket to choose a default list: {e}",
+            status=503,
+            mimetype="text/plain",
+        )
+    if not slug:
+        return Response(
+            "no input files under the tiers/ prefix, so there is no list to show",
+            status=503,
+            mimetype="text/plain",
+        )
+    return redirect(f"/l/{slug}", code=302)
+
+
+@app.get("/l/<slug>")
+def board(slug):
+    """One document for every list. The slug lives in the URL and the inlined
+    script reads it from there, so there is no template per list."""
+    user, _, err = require_user()
+    if err:
+        return err
+    page, err = _board_page()
+    if err:
+        return err
+    # The document is a SHELL and is not the authority on whether a list
+    # exists: /api/list/<slug> is, and it answers 404. So when the bucket is
+    # reachable an unknown slug is refused here as a courtesy, and when it is
+    # not reachable the shell is still served and the API reports the truth.
+    # Serving a shell is never wrong; claiming a list exists would be.
+    try:
+        known = slug in inventory()
+    except Exception as e:
+        log.warning("cannot verify slug %r against the bucket: %s", slug, e)
+        known = True
+    if not known:
+        return jsonify(error=f"no such list: {slug}"), 404
     return send_file(page)
 
 
@@ -238,6 +323,9 @@ def put_save(slug):
     user, _, err = require_user()
     if err:
         return err
+    bad = same_origin()
+    if bad:
+        return bad
     entry = load_list(slug)
     if not entry:
         return jsonify(error=f"no such list: {slug}"), 404

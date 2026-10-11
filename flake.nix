@@ -90,6 +90,7 @@ print('packaging ok: every entrypoint import resolves inside the shipped tree')
                 # template built.
                 ( cd $out && PYTHONPATH=$out PYTHONDONTWRITEBYTECODE=1 \
                   TIERS_TEMPLATES=$out/templates \
+                  TIERS_DEFAULT_SLUG=asset-check \
                   ${py}/bin/python ${./tiers/tests/test_assets.py} )
               ''
             else

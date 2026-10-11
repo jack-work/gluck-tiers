@@ -25,12 +25,29 @@ def referenced(html):
 
 
 def check(inject=None):
+    """Follow / to the list it redirects to, and assert the RENDERED document.
+
+    / is a 302 now. Treating a 302 as a pass would reintroduce the exact bug
+    this file exists to catch: a status code that looks like success while
+    nothing was ever rendered.
+    """
     c = main.app.test_client()
     h = {"Remote-User": "asset-check", "Remote-Groups": ""}
     r = c.get("/", headers=h)
+    if r.status_code != 302:
+        raise SystemExit(f"asset check: / returned {r.status_code}, expected a 302")
+    target = r.headers.get("Location", "")
+    if not target.startswith("/l/"):
+        raise SystemExit(f"asset check: / redirected to {target!r}, expected /l/<slug>")
+    r = c.get(target, headers=h)
     if r.status_code != 200:
-        raise SystemExit(f"asset check: / returned {r.status_code}, expected 200")
+        raise SystemExit(
+            f"asset check: {target} returned {r.status_code}, expected 200. "
+            f"The redirect target must render, not merely exist."
+        )
     html = r.get_data(as_text=True)
+    if "<" not in html or len(html) < 1000:
+        raise SystemExit(f"asset check: {target} returned {len(html)} bytes, not a document")
     if inject:
         html += f'\n<script src="{inject}"></script>'
 
@@ -62,7 +79,54 @@ if __name__ == "__main__":
             "asset check is BROKEN: a deliberately missing asset was not detected"
         )
 
+    # Second negative control, demanded because / is a redirect now: point
+    # the default at a list that does not exist and the check must REFUSE.
+    # Without this, a redirect to nowhere would pass as "the page is whole".
+    #
+    # It can only run where the BUCKET IS REACHABLE, because an unknown slug
+    # is only refused when the service can see the inventory. In a build
+    # sandbox there is no network, so the mode is printed rather than the
+    # control being quietly skipped.
+    import mirror
+
+    try:
+        mirror.list_inputs()
+        bucket = True
+    except Exception as e:
+        bucket = False
+        print(f"note bucket unreachable ({type(e).__name__}), so the unknown-slug "
+              f"control cannot run here; the page-whole check above still did")
+
+    if not bucket:
+        print(
+            f"asset check: page whole, {len(local)} local asset reference(s), "
+            f"all 200; one negative control fired, one needs the bucket"
+        )
+        raise SystemExit(0)
+
+    before = os.environ.get("TIERS_DEFAULT_SLUG")
+    os.environ["TIERS_DEFAULT_SLUG"] = "definitely-not-a-list"
+    try:
+        check()
+    except SystemExit as e:
+        if "404" not in str(e):
+            raise SystemExit(
+                f"asset check is BROKEN: a default pointing at nothing failed for "
+                f"the wrong reason: {e}"
+            )
+        print(f"ok   negative control: a default pointing at nothing refuses ({e})")
+    else:
+        raise SystemExit(
+            "asset check is BROKEN: a default slug that does not exist still passed, "
+            "so a redirect to nowhere reads as a whole page"
+        )
+    finally:
+        if before is None:
+            os.environ.pop("TIERS_DEFAULT_SLUG", None)
+        else:
+            os.environ["TIERS_DEFAULT_SLUG"] = before
+
     print(
         f"asset check: page whole, {len(local)} local asset reference(s), "
-        f"all 200; negative control fired on a missing asset"
+        f"all 200; both negative controls fired"
     )
