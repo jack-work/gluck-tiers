@@ -90,7 +90,7 @@ print('packaging ok: every entrypoint import resolves inside the shipped tree')
             inherit config lib pkgs;
             name = "gluck-tiers";
             subdomain = "tiers";
-            port = 9103;
+            port = 9104;
             entrypoint = "${app}/main.py";
             pythonPackages = ps: with ps; [ flask waitress boto3 ];
             stateDirectory = "gluck-tiers";

@@ -15,7 +15,8 @@
 </head>
 <body>
 <div id="out">running...</div>
-<iframe id="f" src="/www/index.html"></iframe>
+<iframe id="f"></iframe>
+<script>document.getElementById("f").src = "/www/index.html" + location.search;</script>
 
 <script>
 const out = document.getElementById('out');
@@ -56,15 +57,23 @@ async function drag(win, card, to, steps = 8) {
 
 async function run() {
   const f = document.getElementById('f');
-  const win = f.contentWindow, doc = f.contentDocument;
-  await sleep(2500);
+  /* The iframe replaces its document on navigation, so a reference captured
+   * before load points at the discarded about:blank. Re-read it every poll. */
+  let win = null, doc = null;
+  for (let i = 0; i < 150; i++) {
+    doc = f.contentDocument; win = f.contentWindow;
+    if (doc && doc.readyState === 'complete' && doc.querySelectorAll('.card').length > 0) break;
+    await sleep(100);
+  }
+  await sleep(500);
 
   head('load');
   const cards = doc.querySelectorAll('.card');
   ok('cards rendered', cards.length === 72, cards.length + ' cards');
   const imgs = [...doc.querySelectorAll('.thumb')].filter(i => i.naturalWidth > 0).length;
   ok('thumbnails actually decoded', imgs > 0, imgs + ' of ' + doc.querySelectorAll('.thumb').length + ' loaded');
-  ok('heft armed every card', [...cards].every(c => c.__heft === true));
+  ok('heft armed every card', cards.length > 0 && [...cards].every(c => c.__heft === true),
+     cards.length + ' inspected');
   ok('all cards start unranked', doc.getElementById('pool').children.length === 72);
 
   head('the drop');
@@ -75,7 +84,8 @@ async function run() {
   const landed = doc.querySelector('.drop[data-tier="S"] .card[data-id="' + CSS.escape(id) + '"]');
   ok('card reparents into the row it was dropped on', !!landed);
   ok('card left the pool', !doc.querySelector('#pool .card[data-id="' + CSS.escape(id) + '"]'));
-  ok('translate cleared so it does not spring', !landed || landed.style.translate === '0px 0px', landed ? landed.style.translate : '-');
+  const tr = landed ? landed.style.translate : '-';
+  ok('translate cleared so it does not spring', !landed || tr === '0px' || tr === '0px 0px', tr);
   ok('pool count updated', doc.getElementById('poolcount').textContent === '(71)', doc.getElementById('poolcount').textContent);
 
   head('negative controls, these must be able to fail');
@@ -98,13 +108,16 @@ async function run() {
   ok('control: a real drop into A still works after the failures above', inA);
 
   head('cost at 390x844');
-  const frames = await win.eval ? null : null;
   const t = await measure(win, doc);
+  ok('no dropped frames while dragging', t.janky === 0,
+     'variant ' + (location.search || '(plain cards)') + ' · avg ' + t.avg.toFixed(2) +
+     'ms · worst ' + t.max.toFixed(1) + 'ms · frames over 20ms: ' + t.janky + ' of ' + t.n);
   ok('drag frame budget under 16.7ms', t.avg < 16.7, 'avg ' + t.avg.toFixed(2) + 'ms over ' + t.n + ' frames, worst ' + t.max.toFixed(1) + 'ms');
 
   lines.push('<h2>' + (fails ? fails + ' FAILED' : 'all passed') + '</h2>');
   out.innerHTML = lines.join('');
   document.title = fails ? 'FAIL' : 'PASS';
+  report();
 }
 
 function measure(win, doc) {
@@ -122,14 +135,22 @@ function measure(win, doc) {
       else {
         fire(win, card, 'pointerup', a.x, a.y);
         const n = times.slice(2);
-        resolve({ avg: n.reduce((s, v) => s + v, 0) / n.length, max: Math.max(...n), n: n.length });
+        resolve({ avg: n.reduce((s, v) => s + v, 0) / n.length, max: Math.max(...n), n: n.length,
+                  janky: n.filter(v => v > 20).length });
       }
     }
     requestAnimationFrame(step);
   });
 }
 
-run().catch(e => { out.innerHTML += '<div class="fail">harness threw: ' + e.message + '</div>'; document.title = 'FAIL'; });
+function report() {
+  const text = lines.join('\n').replace(/<[^>]+>/g, '').replace(/\n+/g, '\n');
+  fetch('/result', { method: 'POST', body: JSON.stringify({ fails: fails, text: text }, null, 1) });
+}
+run().catch(e => {
+  lines.push('harness threw: ' + e.message + ' @ ' + (e.stack || '').split('\n')[1]);
+  fails++; out.innerHTML = lines.join(''); document.title = 'FAIL'; report();
+});
 </script>
 </body>
 </html>

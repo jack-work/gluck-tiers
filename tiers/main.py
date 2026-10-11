@@ -22,10 +22,21 @@ ADMIN_GROUP = os.environ.get("TIERS_ADMIN_GROUP", "gluck-tiers-admin")
 app = Flask(__name__)
 log = logging.getLogger("gluck-tiers")
 
-_mirror = mirror.Mirror(STATE)
+# Nothing here touches the disk. Importing a module must be free of side
+# effects, or the packaging check cannot import it and the unit's startup is
+# coupled to a writable path existing before python runs. The packaging check
+# in flake.nix caught exactly that.
+_mirror = None
 _store = None
 _cache = {}
 _lock = threading.Lock()
+
+
+def images():
+    global _mirror
+    if _mirror is None:
+        _mirror = mirror.Mirror(STATE)
+    return _mirror
 
 
 def store():
@@ -71,7 +82,7 @@ def load_list(slug):
             return hit
     raw = mirror.get_object(key, s3=s3).decode("utf-8", "replace")
     parsed = parse.parse(raw, hint=pathlib.Path(key).suffix)
-    items, errors = _mirror.ingest_list(parsed["items"], s3=s3)
+    items, errors = images().ingest_list(parsed["items"], s3=s3)
     for e in errors:
         log.error("image unresolved id=%s source=%s: %s", e["id"], e["source"], e["error"])
     entry = {
@@ -137,7 +148,7 @@ def img(sha):
         return err
     if not sha.isalnum() or len(sha) != 64:
         return jsonify(error="not a sha256"), 404
-    path = _mirror.path_for(sha)
+    path = images().path_for(sha)
     if not path:
         return jsonify(error="unknown image"), 404
     resp = send_file(path)
@@ -188,7 +199,7 @@ def status():
         lists[slug] = {"items": len(entry["items"]), "image_errors": len(entry["errors"])}
     return jsonify(
         admin=ADMIN_GROUP in groups,
-        mirrored=len(list(_mirror.dir.glob("*.*"))),
+        mirrored=len(list(images().dir.glob("*.*"))),
         lists=lists,
     )
 
