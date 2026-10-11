@@ -127,10 +127,35 @@ async function run() {
      'ms · worst ' + t.max.toFixed(1) + 'ms · frames over 20ms: ' + t.janky + ' of ' + t.n);
   ok('drag frame budget under 16.7ms', t.avg < 16.7, 'avg ' + t.avg.toFixed(2) + 'ms over ' + t.n + ' frames, worst ' + t.max.toFixed(1) + 'ms');
 
+  const sc = await measureScroll(win, doc);
+  ok('no dropped frames while SCROLLING', sc.janky === 0,
+     'avg ' + sc.avg.toFixed(2) + 'ms · worst ' + sc.max.toFixed(1) +
+     'ms · over 20ms: ' + sc.janky + ' of ' + sc.n);
+
   lines.push('<h2>' + (fails ? fails + ' FAILED' : 'all passed') + '</h2>');
   out.innerHTML = lines.join('');
   document.title = fails ? 'FAIL' : 'PASS';
   report();
+}
+
+/* Scroll, not drag, is the raster question: heft removes the filter from the
+ * held card, so a drag moves one unfiltered element over a cached raster. */
+function measureScroll(win, doc) {
+  return new Promise(resolve => {
+    const times = []; let last = performance.now(), i = 0;
+    win.scrollTo(0, 0);
+    function step(now) {
+      times.push(now - last); last = now; i++;
+      win.scrollBy(0, (i % 2 ? 1 : -1) * 90);
+      if (i < 60) requestAnimationFrame(step);
+      else {
+        const n = times.slice(2);
+        resolve({ avg: n.reduce((s, v) => s + v, 0) / n.length, max: Math.max(...n),
+                  n: n.length, janky: n.filter(v => v > 20).length });
+      }
+    }
+    requestAnimationFrame(step);
+  });
 }
 
 function measure(win, doc) {
