@@ -20,6 +20,20 @@ TEMPLATES = pathlib.Path(os.environ.get("TIERS_TEMPLATES", pathlib.Path(__file__
 ADMIN_GROUP = os.environ.get("TIERS_ADMIN_GROUP", "gluck-tiers-admin")
 
 app = Flask(__name__)
+
+
+@app.after_request
+def cache_policy(resp):
+    """An API response with no cache directive is a policy nobody chose.
+
+    Images are content-addressed and immutable for a year, set at their own
+    route. Everything under /api/ reflects live state: a list re-parses when
+    its object's ETag moves, and a saved arrangement changes under the user's
+    own hand, so a cached copy is a wrong answer rather than a stale one.
+    """
+    if request.path.startswith("/api/"):
+        resp.headers.setdefault("Cache-Control", "no-store")
+    return resp
 log = logging.getLogger("gluck-tiers")
 
 # Nothing here touches the disk. Importing a module must be free of side
@@ -29,6 +43,7 @@ log = logging.getLogger("gluck-tiers")
 _mirror = None
 _store = None
 _cache = {}
+_collisions = {}
 _lock = threading.Lock()
 
 
@@ -67,10 +82,47 @@ def slug_of(key):
     return pathlib.Path(key).stem
 
 
+# Two files can name the same list: the canonical .json and a .txt or .csv
+# written by hand. The suffix decides which one wins, because directory order
+# must never decide what a reader sees. doc/input-format.md calls JSON
+# canonical, so JSON wins, and the shipped .txt stays a fixture for the second
+# parser path rather than becoming a competing source of truth.
+#
+# The cost of getting this wrong is not cosmetic: the .txt folds the artist
+# into the name as "Kids - MGMT" and carries no sub, so letting it win empties
+# the secondary line on every card.
+SUFFIX_RANK = {".json": 0, ".csv": 1, ".txt": 2}
+
+
+def _rank(key):
+    return SUFFIX_RANK.get(pathlib.Path(key).suffix.lower(), 99)
+
+
+def inventory(s3=None):
+    """Map slug to the one winning key, deterministically and audibly."""
+    groups = {}
+    for i in mirror.list_inputs(s3):
+        groups.setdefault(slug_of(i["key"]), []).append(i["key"])
+    best = {}
+    for slug, keys in groups.items():
+        winner = sorted(keys, key=lambda k: (_rank(k), k))[0]
+        best[slug] = winner
+        if len(keys) > 1:
+            losers = [k for k in keys if k != winner]
+            _collisions[slug] = {"winner": winner, "losers": losers}
+            log.warning(
+                "input collision: slug %s is claimed by %d files, serving %s, ignoring %s",
+                slug, len(keys), winner, ", ".join(losers),
+            )
+        else:
+            _collisions.pop(slug, None)
+    return best
+
+
 def load_list(slug):
     """Parse and mirror one list, cached on the object's ETag."""
     s3 = mirror.client()
-    inputs = {slug_of(i["key"]): i["key"] for i in mirror.list_inputs(s3)}
+    inputs = inventory(s3)
     key = inputs.get(slug)
     if not key:
         return None
@@ -122,15 +174,15 @@ def api_lists():
     if err:
         return err
     out = []
-    for i in mirror.list_inputs():
-        slug = slug_of(i["key"])
+    for slug, key in sorted(inventory().items()):
         cached = _cache.get(slug)
         out.append({
             "slug": slug,
             "title": cached["title"] if cached else slug.replace("-", " ").title(),
             "items": len(cached["items"]) if cached else None,
+            "source": key,
         })
-    return jsonify(lists=sorted(out, key=lambda x: x["slug"]))
+    return jsonify(lists=out)
 
 
 @app.get("/api/list/<slug>")
@@ -210,6 +262,10 @@ def status():
         admin=ADMIN_GROUP in groups,
         mirrored=len(list(images().dir.glob("*.*"))),
         lists=lists,
+        # Two input files claiming one slug. Deterministic precedence picks a
+        # winner, but a silent pick is the defect: the loser tonight was the
+        # format carrying the artist field.
+        input_collisions=_collisions,
     )
 
 

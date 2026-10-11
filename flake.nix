@@ -74,6 +74,23 @@ print('packaging ok: every entrypoint import resolves inside the shipped tree')
                   --component boil --component phosphor \
                   ${boardSrc} -o $out/templates/board.html
                 zanni-check $out/templates/board.html
+
+                # Caddy reverse-proxies EVERYTHING for this host and runs no
+                # file_server, and Flask routes only /, /api/* and /img/<sha>.
+                # So a second request for board.js can never be served: the
+                # page loaded 200 while its script 404'd and nothing ran. The
+                # script is therefore inlined, the same reason zanni-inline
+                # inlines its filter defs: no second request to get wrong.
+                PYTHONDONTWRITEBYTECODE=1 ${py}/bin/python ${./tiers/inline_assets.py} \
+                  $out/templates/board.html ${./www}
+
+                # Fetch the page through the real app and demand every asset
+                # it still references answers 200. "/ returns 200" was taken
+                # as evidence the board worked; it only ever proved the
+                # template built.
+                ( cd $out && PYTHONPATH=$out PYTHONDONTWRITEBYTECODE=1 \
+                  TIERS_TEMPLATES=$out/templates \
+                  ${py}/bin/python ${./tiers/tests/test_assets.py} )
               ''
             else
               ''
