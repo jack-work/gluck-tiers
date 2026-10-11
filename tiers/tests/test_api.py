@@ -166,11 +166,20 @@ for blocked in ("http://127.0.0.1:3900/files", "http://localhost:9091/",
 check("ssrf: loopback, private, link-local and non-http are all refused", True)
 check("ssrf: a real public CDN host is still allowed, so the guard is not a wall",
       _m.assert_fetchable("https://i.scdn.co/image/abc") is True)
+_prov = _m.Mirror("/tmp/tiers-prov")
 try:
-    _m.Mirror("/tmp/tiers-prov").ingest("https://i.scdn.co/image/abc", allow_remote=False)
+    _prov.ingest("https://i.scdn.co/image/abc", allow_remote=False, allow_keys=False)
     raise AssertionError("provenance: an imported list was allowed to fetch")
 except _m.MissingObject as e:
-    check("provenance: an imported list may not fetch remote images", "imported" in str(e))
+    check("provenance: an imported list may not fetch remote images", "mirrored" in str(e))
+try:
+    _prov.ingest("https://i.scdn.co/image/abc", allow_remote=False)
+    raise AssertionError("a call site omitted allow_keys and was allowed to")
+except TypeError as e:
+    check(
+        "permission cannot be inherited: omitting a flag is a TypeError, not a default",
+        "allow_keys" in str(e),
+    )
 
 # ── cross-site writes, which were free until tonight ────────────────
 check(
