@@ -50,12 +50,17 @@
             # is present by construction. It is deliberately NOT the packaging
             # check: this estate has watched a suite like this stay green while
             # the shipped unit died at import.
-            TIERS_EXAMPLES=$PWD/examples ${py}/bin/python tiers/tests/test_parse.py
+            TIERS_EXAMPLES=$PWD/examples PYTHONDONTWRITEBYTECODE=1 \
+              ${py}/bin/python tiers/tests/test_parse.py
 
             # The packaging check imports from $out ALONE, so it fails when a
             # module the entrypoint needs did not ship. doc/packaging.md holds
             # the negative control that proves it can fail.
-            ( cd $out && PYTHONPATH=$out ${py}/bin/python -c "
+            # PYTHONDONTWRITEBYTECODE, or this very check writes a
+            # __pycache__ into the artifact it is checking. A .pyc in a
+            # shipped tree can shadow the module it was built from, which is
+            # the failure this check exists to catch, arriving by another door.
+            ( cd $out && PYTHONPATH=$out PYTHONDONTWRITEBYTECODE=1 ${py}/bin/python -c "
 import main, parse, mirror, store
 assert hasattr(main, 'app'), 'main exposes no app'
 print('packaging ok: every entrypoint import resolves inside the shipped tree')
