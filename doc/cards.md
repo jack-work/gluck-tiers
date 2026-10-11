@@ -56,6 +56,59 @@ Then negative-control the checker: assert that a key you know is absent is
 reported missing. A cross-check that cannot fail is not a check. A missing key
 must fail loudly at load or render a visible text chip, never a broken image.
 
+## A second source: the public Deezer API
+
+Found and executed by aria `3dec6ffc` for the second list,
+`tiers/millennial-cringe.json`, 61 tracks and 58 covers.
+
+| step | endpoint | yields |
+|---|---|---|
+| 1 | `https://api.deezer.com/search?q=<title artist>` | `title`, `artist.name`, and `album.cover_medium` / `cover_big` |
+
+No credential, no key, no account. Covers come back at 500x500, larger than
+Spotify's 300x300 oembed path.
+
+### The judgement that matters more than the endpoint
+
+`3dec6ffc` **discarded eleven tracks rather than ship them.** Relaxed matching
+started returning karaoke covers and remixes credited to the wrong artist, so
+it tightened the match and dropped what would not match cleanly.
+
+**A wrong card is worse than a missing one.** This is a data-quality rule, not
+a note. A missing card is visibly absent and someone adds it. A karaoke cover
+credited to the original artist looks exactly like a correct card, is wrong on
+a screen Gluck is reading, and nobody audits it because nothing looks broken.
+It is the same shape as every instrument failure in `doc/instruments.md`: the
+plausible wrong answer costs more than the obvious absence.
+
+So when matching loosely against any third-party catalogue: prefer the empty
+field, log what you dropped and why, and make the count visible.
+
+## `/img/<sha256>` is a capability URL
+
+Write this down before anyone extends the pattern, because it becomes true the
+moment the site stops being gated.
+
+Today the path leaks nothing: every route is behind Authelia and nothing
+unauthenticated can reach it. The hash is an implementation detail.
+
+**On a public site, a content-addressed path stops being obscure and becomes a
+bearer token.** Anyone holding the URL holds the object, forever, with no
+revocation, no expiry and no audit. There is no "log out" for a hash.
+
+| that is | fine for | not fine for |
+|---|---|---|
+| album art, already public on a CDN | this service today | anything private that later lands in the bucket under a hash |
+
+Two consequences, both load-bearing:
+
+- If this service is ever made public, `/img/<sha256>` must either be
+  restricted to hashes belonging to a public list, or signed with an expiry
+  the way the lister's download redirects already are.
+- Never reuse this pattern for an object whose contents are not already
+  public. The lister serves private objects through presigned redirects valid
+  for 120 seconds, which is the correct shape; a permanent hash is not.
+
 ## The service's credential
 
 `gluck-tiers-ro`, created 2026-10-10. Read-only on the `files` bucket, proven

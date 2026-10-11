@@ -11,7 +11,8 @@ asking the integrator, not by editing one side.
 
 | method | path | returns |
 |---|---|---|
-| GET | `/` | the board HTML, built by `zanni-inline` |
+| GET | `/` | **302 to the default list**, so the url already on his phone keeps working |
+| GET | `/l/<slug>` | the board HTML for one list, built by `zanni-inline` |
 | GET | `/api/lists` | `{"lists":[{"slug","title","items"}]}`, the inventory |
 | GET | `/api/list/<slug>` | one list, shape below |
 | GET | `/img/<sha256>` | image bytes, `Cache-Control: public, max-age=31536000, immutable` |
@@ -72,3 +73,31 @@ pattern is El Portero's and it is not up for renegotiation.
 A save that references an item the list does not contain is rejected rather
 than stored. Storing it would make a save that silently loses cards when the
 list is refilled, and the loss would look like a UI bug.
+
+## Addendum, 2026-10-11: lists are addressable
+
+Two lists exist on the bucket now, so a list needs a URL.
+
+| was | is |
+|---|---|
+| `/` served the board and the board chose a list | `/l/<slug>` serves the board for one list |
+| nothing was linkable | every list is linkable |
+
+`/` **must keep working**: it redirects, 302, to the default list. Gluck
+already has `https://tiers.kelliher.info` in his phone and a URL that stops
+working is a bug regardless of what replaced it.
+
+The picker reads `/api/lists` and links to `/l/<slug>`. It already carries the
+winning `source` key per slug, so which input file won is visible rather than
+inferred.
+
+### Import
+
+An imported file is parsed and held **in the browser**. It is never written to
+the bucket, and this service's Garage key stays read-only. See `doc/imports.md`
+for why, and for the rule if persistence is ever wanted: the write goes through
+the lister under the user's own grant, never through the service key.
+
+An imported list is addressable only as the browser's current state. It gets no
+slug and no URL, because a URL that only works in one browser session is worse
+than no URL.
