@@ -50,6 +50,62 @@ asserted a bucket grant that did not exist and the first real upload disproved
 it in thirty seconds. Mark a mechanism UNBUILT until something has exercised
 it.
 
+## An imported image resolves to a hash, or to nothing
+
+This is a security boundary, not a parser detail.
+
+An imported file names its own images. If an imported item could resolve a
+**bucket key**, the service would read that key with **its own credential**,
+and that credential has read on the entire `files` bucket, because Garage
+1.3.1 grants per bucket and not per prefix. Three lines of JSON would then be
+an arbitrary read of the whole file store:
+
+```json
+{ "items": [ { "name": "x", "img": "dad/rental-agreement.pdf" } ] }
+```
+
+The service would fetch an object the user holds no grant for, hash it, and
+serve the bytes at `/img/<sha256>`, bypassing the per-path ACL engine
+entirely rather than merely ignoring it, and minting a permanent capability
+URL for the stolen object. The file in that example is the exact one the
+acceptance test proved Gluck's father could not reach.
+
+| an imported item's `img` | result |
+|---|---|
+| a bare `sha256` already in the mirror | accepted |
+| `/img/<sha256>` already in the mirror | accepted |
+| a well-formed sha that is **not** mirrored | refused, counted |
+| a bucket key, anywhere, including inside `tiers/` | refused, counted |
+| a remote URL, including one pointing at loopback | refused, counted |
+| the same attack through `img_url` | refused, counted |
+
+A refusal renders a visible text chip and appears in the rejection report. It
+is never silent.
+
+**Provenance decides, not location.** A bucket key inside `tiers/` is refused
+too, because the question is who supplied the input, not where the object
+lives. `allow_remote` and `allow_keys` are keyword-only with **no defaults**,
+so a call site must state its permission in words; that change immediately
+caught an internal call that had omitted one, failing with a `TypeError`
+rather than quietly inheriting permission.
+
+### How this is tested, and one choice worth copying
+
+`bae66181` fired the payload above at a **real** object outside `tiers/`,
+plus five variants, and asserted the mirror gained nothing each time.
+
+The test **does not read the object it names.** Proving the service did not
+fetch something does not require the test to fetch it, and a security test
+that reads a private file to prove a private file was not read has exfiltrated
+it to make its point. It counts mirror bytes before and after instead: no new
+bytes means no fetch. That is also the stronger assertion, because it observes
+the artifact rather than comparing hashes the test would have had to read the
+file to compute.
+
+And the guard **discriminates**, which is the half that makes it evidence: an
+already-mirrored hash is accepted while an unmirrored one is refused. A guard
+that refuses everything proves nothing about whether it is looking.
+
 ## An import is the most attackable surface on this service
 
 It is the only input a user supplies directly. Three limits, all mandatory.
