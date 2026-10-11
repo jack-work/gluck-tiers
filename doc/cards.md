@@ -58,9 +58,13 @@ must fail loudly at load or render a visible text chip, never a broken image.
 
 ## The service's credential
 
-`gluck-tiers-ro`, key id `GKff3dd83092728e498842065b`, created 2026-10-10.
-Read-only on the `files` bucket, proven by negative control: a `PutObject`
-probe returned `AccessDenied`.
+`gluck-tiers-ro`, created 2026-10-10. Read-only on the `files` bucket, proven
+by negative control: a `PutObject` probe returned `AccessDenied`.
+
+The key id is deliberately not written here. This repo is public, and the id
+buys a reader nothing that `garage key list` on the box does not give an
+operator who is already inside. The secret half lives in sops as
+`gluck_tiers_garage_credentials`.
 
 It is a separate key from `files-lister` and from `tfstate-rw` on purpose. One
 key per consumer, so a grant can be revoked without taking a neighbour down.
