@@ -45,3 +45,36 @@ zeroes mtimes in the store, which is what makes builds reproducible. The
 Do not "fix" the date. A real mtime would vary between otherwise identical
 builds, and it would buy nothing: the document is served `no-store`, so there
 is no revalidation to improve.
+
+## A string replacement that matched nothing, and said it worked
+
+Twice in one night, in this repo, a patch script of mine wrote code that was
+never applied and reported success anyway:
+
+```python
+if 'TIERS_DEFAULT_SLUG' not in s and 'test_assets' in s:
+    s = s.replace(old, new)        # old did not occur: no-op
+    p.write_text(s)
+    print("flake: asset check given an explicit default")
+```
+
+The guard tested the wrong thing, the replacement found no anchor, the file was
+rewritten unchanged, and the script printed a confident sentence. The build
+then failed somewhere else entirely, so the diagnosis cost two cycles: once for
+`/` answering 503 because the environment variable never reached the derivation,
+and once for `MAX_IMPORT_BYTES` being undefined at runtime because the
+constants block was never inserted.
+
+The tell was available and ignored both times: **the error was about a thing the
+patch claimed to have fixed.**
+
+| rule | why |
+|---|---|
+| assert the anchor before writing | `assert old in s, "anchor missing"` turns a silent no-op into a loud stop |
+| never let the success message come from reaching the end of the script | it must come from observing the change |
+| grep the file for the new text afterwards | one command, and it reads the artifact rather than the intention |
+
+This is the same family as the `tail` that exited 0 for a failing `git`, the
+`pgrep` that matched the text of a briefing instead of a process, and the proxy
+that dropped the header it was measuring. The instrument reported on itself
+rather than on the world.

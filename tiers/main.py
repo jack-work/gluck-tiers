@@ -20,7 +20,18 @@ STATE = pathlib.Path(os.environ.get("STATE_DIRECTORY") or os.environ.get("TIERS_
 TEMPLATES = pathlib.Path(os.environ.get("TIERS_TEMPLATES", pathlib.Path(__file__).parent / "templates"))
 ADMIN_GROUP = os.environ.get("TIERS_ADMIN_GROUP", "gluck-tiers-admin")
 
+# A forgiving parser handed a 200 MB file is a denial of service against a
+# 15 GB box that is also the house router. The real lists are 7 to 23 KB.
+MAX_IMPORT_BYTES = int(os.environ.get("TIERS_MAX_IMPORT_BYTES", 1 << 20))
+MAX_IMPORT_ITEMS = int(os.environ.get("TIERS_MAX_IMPORT_ITEMS", 2000))
+
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_IMPORT_BYTES
+
+
+@app.errorhandler(413)
+def too_large(_e):
+    return jsonify(error=f"import exceeds {MAX_IMPORT_BYTES} bytes"), 413
 
 
 @app.after_request
@@ -167,7 +178,11 @@ def load_list(slug):
             return hit
     raw = mirror.get_object(key, s3=s3).decode("utf-8", "replace")
     parsed = parse.parse(raw, hint=pathlib.Path(key).suffix)
-    items, errors = images().ingest_list(parsed["items"], s3=s3)
+    # Stated rather than defaulted. A bucket object is admin-controlled, so it
+    # may name keys and may be fetched from; doc/fetching.md.
+    items, errors = images().ingest_list(
+        parsed["items"], s3=s3, allow_remote=True, allow_keys=True
+    )
     for e in errors:
         log.error("image unresolved id=%s source=%s: %s", e["id"], e["source"], e["error"])
     for w in parsed.get("warnings", []):
@@ -342,6 +357,72 @@ def put_save(slug):
             return jsonify(error=f"tier not in this list: {tier}"), 400
     store().put(user, slug, assign)
     return "", 204
+
+
+@app.post("/api/import")
+def api_import():
+    """Parse a dropped file and hand the list back. Nothing is stored.
+
+    One parser, this one, because a second parser in JS drifts from it the
+    first time a tolerance changes. Nothing reaches the bucket: there is no
+    write path and the service key is read-only by design.
+
+    The security boundary is the image rule. An imported item names its own
+    images, and this service holds read on the WHOLE files bucket because
+    Garage grants per bucket rather than per prefix. So an imported image
+    resolves ONLY to a hash already mirrored. Were it allowed to name a bucket
+    key, three lines of JSON would read any object in the bucket and mint a
+    permanent capability URL for it. doc/imports.md.
+    """
+    user, _, err = require_user()
+    if err:
+        return err
+    bad = same_origin()
+    if bad:
+        return bad
+
+    hint = None
+    if request.files:
+        f = next(iter(request.files.values()))
+        raw = f.read(MAX_IMPORT_BYTES + 1)
+        # The filename is read for a format HINT only. The list's name comes
+        # from the contents, never from what the file happened to be called.
+        hint = pathlib.Path(f.filename or "").suffix.lower() or None
+    else:
+        raw = request.get_data(cache=False)[: MAX_IMPORT_BYTES + 1]
+    if len(raw) > MAX_IMPORT_BYTES:
+        return jsonify(error=f"import exceeds {MAX_IMPORT_BYTES} bytes"), 413
+    if not raw.strip():
+        return jsonify(error="the imported file is empty"), 400
+
+    try:
+        parsed = parse.parse(raw.decode("utf-8", "replace"), hint=hint)
+    except parse.InputError as e:
+        return jsonify(error=f"could not read that file: {e}"), 400
+    if len(parsed["items"]) > MAX_IMPORT_ITEMS:
+        return jsonify(
+            error=f"{len(parsed['items'])} items exceeds the limit of {MAX_IMPORT_ITEMS}"
+        ), 413
+
+    items, errors = images().ingest_list(
+        parsed["items"], allow_remote=False, allow_keys=False
+    )
+    for e in errors:
+        log.info("import refused an image for %s: %s", user, e["error"])
+    return jsonify(
+        title=parsed["title"],
+        tiers=parsed["tiers"],
+        items=[{k: i[k] for k in ("id", "name", "sub", "img")} for i in items],
+        rejected={
+            "rows": parsed.get("warnings", []),
+            "images": errors,
+            "counts": {
+                "rows_skipped": len(parsed.get("warnings", [])),
+                "images_refused": len(errors),
+                "items_accepted": len(items),
+            },
+        },
+    )
 
 
 @app.get("/api/status")

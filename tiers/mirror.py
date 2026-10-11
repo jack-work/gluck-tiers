@@ -9,6 +9,7 @@ Two rules from doc/cards.md:
 import configparser
 import hashlib
 import ipaddress
+import re
 import json
 import os
 import pathlib
@@ -207,8 +208,27 @@ class Mirror:
         return None
 
     MAX_IMAGE_BYTES = 8 * 1024 * 1024
+    SHA_RE = re.compile(r"^(?:/img/)?([0-9a-f]{64})$")
 
-    def ingest(self, source, s3=None, timeout=15, allow_remote=True):
+    def already_mirrored(self, source):
+        """Resolve ONLY to bytes this service has already mirrored.
+
+        The whole import security boundary is this method. An imported list may
+        reuse a cover that an admin-controlled input already brought in, and can
+        reach nothing else: no bucket key, no url, no fetch. doc/imports.md.
+        """
+        m = self.SHA_RE.match((source or "").strip())
+        if not m:
+            raise MissingObject(
+                f"an imported list may only name an already-mirrored image, "
+                f"not {source!r}"
+            )
+        sha = m.group(1)
+        if not self.path_for(sha):
+            raise MissingObject(f"{sha} is not in the mirror")
+        return sha
+
+    def ingest(self, source, s3=None, timeout=15, *, allow_remote, allow_keys):
         """Return the sha256 for one image source, fetching it at most once.
 
         allow_remote is the PROVENANCE of the input, not a property of the
@@ -219,6 +239,11 @@ class Mirror:
         """
         if not source:
             return None
+        # Neither flag is defaulted, so no call site can inherit permission
+        # it never asked for. A default is a decision nobody re-reads.
+        if not allow_remote and not allow_keys:
+            return self.already_mirrored(source)
+
         if source in self.index:
             sha = self.index[source]
             if self.path_for(sha):
@@ -243,6 +268,10 @@ class Mirror:
                     f"{source} exceeds {self.MAX_IMAGE_BYTES} bytes, refused"
                 )
         else:
+            if not allow_keys:
+                raise MissingObject(
+                    f"this input may not name a bucket key: {source!r}"
+                )
             blob = get_object(source, s3=s3)
 
         if not blob:
@@ -258,7 +287,7 @@ class Mirror:
         self._save_index()
         return sha
 
-    def ingest_list(self, items, s3=None, allow_remote=True):
+    def ingest_list(self, items, s3=None, *, allow_remote, allow_keys):
         """Mirror every image in a parsed list.
 
         Returns (items, errors). An item whose image cannot be resolved gets
@@ -266,7 +295,9 @@ class Mirror:
         rather than swallowed: the caller logs it and the status endpoint
         counts it. Silence is the one outcome that is forbidden.
         """
-        s3 = s3 or client()
+        # An import needs no S3 client at all, which is itself a property:
+        # the credential is never even constructed on that path.
+        s3 = s3 if s3 is not None else (client() if allow_keys else None)
         errors = []
         out = []
         for item in items:
@@ -275,7 +306,9 @@ class Mirror:
             card["img"] = None
             if source:
                 try:
-                    sha = self.ingest(source, s3=s3, allow_remote=allow_remote)
+                    sha = self.ingest(
+                        source, s3=s3, allow_remote=allow_remote, allow_keys=allow_keys
+                    )
                     card["img"] = f"/img/{sha}" if sha else None
                 except (MissingObject, BlockedAddress) as e:
                     errors.append({"id": card.get("id"), "source": source, "error": str(e)})
