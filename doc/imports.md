@@ -1,6 +1,6 @@
 ---
 name: imports
-description: Why an imported tier list stays in the browser, and what the rule is if persistence is ever wanted. Read before adding any write path to this service.
+description: Why an imported tier list stays in the browser, why no persistence path exists at all, and the limits an import must enforce because it is user-supplied input. Read before adding any write path or any server-side fetch.
 ---
 
 # Importing a list from a local file
@@ -11,10 +11,10 @@ Gluck asked for a button that reads a file off his machine. It parses through
 There is no second code path, so a file that works as an import works as a
 bucket object and the fixtures cover both.
 
-## An import is ephemeral, and that is a security property
+## An import is ephemeral, and there is no alternative
 
 An imported list lives in the browser for the session. **It is not written to
-the bucket.**
+the bucket**, and it gets no slug and no URL.
 
 | if imports were persisted by this service | consequence |
 |---|---|
@@ -22,30 +22,89 @@ the bucket.**
 | the blast radius of a compromise | changes from "read objects the service already serves" to "write anything into the estate's file store" |
 
 That credential is read-only deliberately, and it was negative-controlled: a
-`PutObject` probe returned `AccessDenied`. Widening it to make a convenience
-button slightly more convenient trades a real security property for nothing
-anybody asked for.
+`PutObject` probe returned `AccessDenied`.
 
-## If persistence is ever wanted, the write does not go here
+## NO PERSISTENCE CONTRACT EXISTS. UNBUILT.
 
-The rule, so the next aria does not quietly widen the credential:
+**Corrected 2026-10-11.** An earlier version of this file said a persisted
+import should be written through El Portero's lister under the user's own
+per-path **write** grant. **That mechanism does not exist.** Verified against
+the running lister and its source by `ad2373f1`:
 
-**A persisted import must be written through El Portero's lister, under the
-USER's own per-path write grant, not through this service's key.**
-
-That is the whole point of the per-path ACL work: the lister is the gateway
-for every request, grants are per path and inherit down the tree, and a write
-is attributable to the human who made it. Writing through a service key makes
-every write look like the service, which destroys attribution and bypasses the
-grant model that already exists.
-
-So the shape, if it is ever built:
-
-| step | who |
+| claim | truth |
 |---|---|
-| user picks a file | browser |
-| parse and preview | this service, or the browser |
-| upload to `tiers/<name>.json` | the **lister**, as the user, needing a write grant on that prefix |
-| appear in the picker | this service, next listing |
+| the lister enforces per-path write grants | **false.** It enforces `read` and `list` only |
+| the `write` column in the ACL table | **reserved and unenforced** |
+| SigV4 uploads straight to Garage | **bypass the ACL engine entirely** |
 
-This service stays read-only on the bucket in every version of that story.
+So there is no "later, persist it through the lister" fallback to lean on.
+There is no write path with user attribution anywhere in this estate today.
+Imports are ephemeral because that is the only honest option, not because a
+better one is being saved for later.
+
+This correction is itself an instance of the rule in
+`spain-flake/docs/deploying.md`: **reviewed prose is not a tested claim.** The
+false sentence was reasoned confidently, written down, read back, and quoted
+by the seat while it was quoting that very file. A design doc here once
+asserted a bucket grant that did not exist and the first real upload disproved
+it in thirty seconds. Mark a mechanism UNBUILT until something has exercised
+it.
+
+## An import is the most attackable surface on this service
+
+It is the only input a user supplies directly. Three limits, all mandatory.
+
+### Size limit
+
+Enforce one, on the request and on the parse. A forgiving parser handed a
+200 MB file is a denial of service against a 15 GB box that is also the house
+router.
+
+### NO REMOTE FETCH FROM AN IMPORTED FILE
+
+An imported input may name `img_url`. **It must never be fetched.**
+
+Spain is the house router. It holds a loopback Garage endpoint on 3900, a
+loopback Authelia on 9091, lldap on 17170 and every other service bound to
+127.0.0.1. A server-side fetch of a URL chosen by an uploaded file is an SSRF
+into all of that, from the one machine on the estate where it hurts most.
+
+| input source | remote URL in the file |
+|---|---|
+| bucket object, admin-controlled | fetched once, mirrored, served content-addressed. This is deliberate: it is how the browser never touches Spotify's CDN |
+| **imported file, user-supplied** | **never fetched.** Images resolve only from keys already in the mirror, otherwise the card renders as a text chip |
+
+The distinction is the **provenance of the input**, not the shape of the URL.
+Harden the bucket path too: refuse any URL resolving to loopback, link-local or
+private address space, because the admin path is not a trust boundary worth
+betting the router on.
+
+### Origin and CSRF
+
+Check `Origin` on the import route and on every save route. The service sits
+behind Authelia with a cookie session, so a cross-site form post carries the
+user's identity for free unless something refuses it.
+
+## Do not scrape the lister's HTML to find importable files
+
+Named and forbidden. The lister's listing checks `ACL.list` on the **prefix**
+and does **not** filter each displayed entry by `ACL.read`, so its HTML can
+name files the viewer may not read. Turning that page into an import menu
+would show a user a menu of things they cannot have.
+
+The fix is not to filter it here. A second implementation of someone else's
+authz drifts from it the first time a rule changes.
+
+## What "download then import" buys
+
+If per-user visibility is deferred, download-then-local-import gets nearly all
+of it with **no new trust surface**: the lister already decides what the user
+may download, as that user, and the file arrives in the browser where the
+import path already handles it.
+
+That makes the import button worth building well rather than minimally:
+
+- accept a dropped file, not only a file chooser
+- take the list's name from its contents, not from the filename
+- say clearly what it rejected and why, with a count, because a tolerant
+  parser that is silent about what it skipped is just a parser that loses data
