@@ -32,6 +32,14 @@ class MissingObject(Exception):
     """A key or URL named by the input resolved to nothing."""
 
 
+class CredentialError(Exception):
+    """The credential file is absent, empty or malformed.
+
+    Separate from MissingObject because the two mean opposite things: one is
+    bad input, the other is a broken deployment.
+    """
+
+
 def _credential_path():
     """The secret arrives as a FILE. Never an argument, never an environment value."""
     d = os.environ.get("CREDENTIALS_DIRECTORY")
@@ -43,12 +51,30 @@ def _credential_path():
 
 
 def client():
+    """Build an S3 client from the credential FILE, and from nothing else.
+
+    boto3 will search the environment, ~/.aws and instance metadata before
+    admitting defeat, so a working read is not evidence that it used the
+    credential you meant. Keys are therefore passed explicitly and every
+    failure to read the file is loud. tests/test_credential.py proves that in
+    a clean room.
+    """
     path = _credential_path()
     if not os.path.exists(path):
-        raise RuntimeError(f"no garage credential at {path}")
+        raise CredentialError(f"no garage credential file at {path}")
+    if os.path.getsize(path) == 0:
+        raise CredentialError(f"garage credential file is empty: {path}")
     cp = configparser.ConfigParser()
-    cp.read(path)
+    try:
+        cp.read(path)
+    except configparser.Error as e:
+        raise CredentialError(f"credential file is not an ini file: {path}: {e}") from e
+    if not cp.sections():
+        raise CredentialError(f"credential file holds no profile section: {path}")
     section = "tiers-ro" if cp.has_section("tiers-ro") else cp.sections()[0]
+    for field in ("aws_access_key_id", "aws_secret_access_key"):
+        if not cp.has_option(section, field) or not cp.get(section, field).strip():
+            raise CredentialError(f"profile [{section}] has no {field}: {path}")
     return boto3.client(
         "s3",
         endpoint_url=ENDPOINT,

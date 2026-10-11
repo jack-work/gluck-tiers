@@ -103,12 +103,14 @@ print('packaging ok: every entrypoint import resolves inside the shipped tree')
               TIERS_S3_ENDPOINT = "http://127.0.0.1:3900";
               TIERS_S3_REGION = "spain";
             };
-            # mkPythonService has no credentials parameter, unlike
-            # mkScheduledJob, so the secret arrives this way instead. It is
-            # read as a FILE from $CREDENTIALS_DIRECTORY: never argv, never
-            # an environment value.
+            # Interpolated, never typed. A literal path can drift from the
+            # declaration in spain-flake; this cannot. restartUnits on the
+            # sops secret is what makes a key rotation actually reach the
+            # running process.
             extraServiceConfig = {
-              LoadCredential = [ "garage:/run/secrets/gluck-tiers-garage" ];
+              LoadCredential = [
+                "garage:${config.sops.secrets.gluck-tiers-garage-credentials.path}"
+              ];
             };
           })
         ];

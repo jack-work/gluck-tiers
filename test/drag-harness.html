@@ -19,6 +19,10 @@
 <script>document.getElementById("f").src = "/www/index.html" + location.search;</script>
 
 <script>
+fetch('/result', { method: 'POST', body: JSON.stringify({ stage: 'script-start', fails: -1, text: 'heartbeat: script began' }) });
+window.addEventListener('error', function (e) {
+  fetch('/result', { method: 'POST', body: JSON.stringify({ stage: 'window-error', fails: 99, text: 'window error: ' + e.message + ' @' + e.lineno }) });
+});
 const out = document.getElementById('out');
 const lines = [];
 let fails = 0;
@@ -108,6 +112,15 @@ async function run() {
   ok('control: a real drop into A still works after the failures above', inA);
 
   head('cost at 390x844');
+  const boiled = doc.querySelectorAll('.card.boil-text').length;
+  const cs = win.getComputedStyle(doc.querySelector('.card'));
+  ok('the variant under test actually applied', true,
+     boiled + ' of ' + cards.length + ' cards wear boil · computed filter: ' + cs.filter);
+  const area = [...doc.querySelectorAll('.card.boil-text')].reduce((a, c) => {
+    const r = c.getBoundingClientRect(); return a + r.width * r.height; }, 0);
+  const headArea = [...doc.querySelectorAll('.row-head.boil-text')].reduce((a, c) => {
+    const r = c.getBoundingClientRect(); return a + r.width * r.height; }, 0);
+  ok('filtered area recorded', true, 'cards ' + Math.round(area) + 'px2 · row heads ' + Math.round(headArea) + 'px2');
   const t = await measure(win, doc);
   ok('no dropped frames while dragging', t.janky === 0,
      'variant ' + (location.search || '(plain cards)') + ' · avg ' + t.avg.toFixed(2) +
