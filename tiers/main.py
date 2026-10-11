@@ -26,12 +26,26 @@ app = Flask(__name__)
 def cache_policy(resp):
     """An API response with no cache directive is a policy nobody chose.
 
-    Images are content-addressed and immutable for a year, set at their own
-    route. Everything under /api/ reflects live state: a list re-parses when
-    its object's ETag moves, and a saved arrangement changes under the user's
-    own hand, so a cached copy is a wrong answer rather than a stale one.
+    Three different answers, because the three things differ:
+
+    | path         | policy             | why |
+    |--------------|--------------------|-----|
+    | `/`          | no-store           | the script is INLINE, so the document is the whole application. A kept copy is a stale app, not a stale shell |
+    | `/api/*`     | no-store           | live state: a list re-parses when its object's ETag moves |
+    | `/img/<sha>` | immutable, 1 year  | content-addressed, so the bytes cannot change under the name |
+
+    no-cache would be the better choice for a document, since it permits a
+    stored copy and demands revalidation, which keeps the ETag useful. It is
+    the wrong choice here because a client that ignores the directive keeps a
+    whole application. A webview did exactly that.
+
+    send_file sets `no-cache` itself, so this must OVERWRITE rather than
+    setdefault. A setdefault here would be a line that looks like a policy and
+    changes nothing.
     """
-    if request.path.startswith("/api/"):
+    if request.path == "/":
+        resp.headers["Cache-Control"] = "no-store"
+    elif request.path.startswith("/api/"):
         resp.headers.setdefault("Cache-Control", "no-store")
     return resp
 log = logging.getLogger("gluck-tiers")
