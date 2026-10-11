@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>drag harness</title>
+<style>
+  body { font: 13px ui-monospace, monospace; background: #15110f; color: #ddd; margin: 0; display: flex; }
+  #out { padding: 10px; width: 520px; }
+  .pass { color: #7fd17f; }
+  .fail { color: #ff7b7b; font-weight: bold; }
+  .note { color: #9a8f82; }
+  iframe { width: 390px; height: 844px; border: 1px solid #444; }
+  h2 { font-size: 13px; margin: 10px 0 4px; color: #d9a94e; }
+</style>
+</head>
+<body>
+<div id="out">running...</div>
+<iframe id="f" src="/www/index.html"></iframe>
+
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+function ok(name, cond, extra) {
+  if (!cond) fails++;
+  lines.push('<div class="' + (cond ? 'pass' : 'fail') + '">' + (cond ? 'pass' : 'FAIL') + ' · ' + name +
+             (extra ? ' <span class="note">(' + extra + ')</span>' : '') + '</div>');
+  out.innerHTML = lines.join('');
+}
+function head(t) { lines.push('<h2>' + t + '</h2>'); out.innerHTML = lines.join(''); }
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function centre(el) {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+function fire(win, target, type, x, y) {
+  target.dispatchEvent(new win.PointerEvent(type, {
+    bubbles: true, cancelable: true, composed: true,
+    clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1,
+    pointerId: 1, pointerType: 'touch', isPrimary: true
+  }));
+}
+
+async function drag(win, card, to, steps = 8) {
+  const a = centre(card);
+  fire(win, card, 'pointerdown', a.x, a.y);
+  for (let i = 1; i <= steps; i++) {
+    fire(win, card, 'pointermove', a.x + (to.x - a.x) * i / steps, a.y + (to.y - a.y) * i / steps);
+    await sleep(8);
+  }
+  fire(win, card, 'pointerup', to.x, to.y);
+  await sleep(40);
+}
+
+async function run() {
+  const f = document.getElementById('f');
+  const win = f.contentWindow, doc = f.contentDocument;
+  await sleep(2500);
+
+  head('load');
+  const cards = doc.querySelectorAll('.card');
+  ok('cards rendered', cards.length === 72, cards.length + ' cards');
+  const imgs = [...doc.querySelectorAll('.thumb')].filter(i => i.naturalWidth > 0).length;
+  ok('thumbnails actually decoded', imgs > 0, imgs + ' of ' + doc.querySelectorAll('.thumb').length + ' loaded');
+  ok('heft armed every card', [...cards].every(c => c.__heft === true));
+  ok('all cards start unranked', doc.getElementById('pool').children.length === 72);
+
+  head('the drop');
+  const sRow = doc.querySelector('.drop[data-tier="S"]');
+  const card = doc.getElementById('pool').children[0];
+  const id = card.dataset.id;
+  await drag(win, card, centre(sRow));
+  const landed = doc.querySelector('.drop[data-tier="S"] .card[data-id="' + CSS.escape(id) + '"]');
+  ok('card reparents into the row it was dropped on', !!landed);
+  ok('card left the pool', !doc.querySelector('#pool .card[data-id="' + CSS.escape(id) + '"]'));
+  ok('translate cleared so it does not spring', !landed || landed.style.translate === '0px 0px', landed ? landed.style.translate : '-');
+  ok('pool count updated', doc.getElementById('poolcount').textContent === '(71)', doc.getElementById('poolcount').textContent);
+
+  head('negative controls, these must be able to fail');
+  const card2 = doc.getElementById('pool').children[0];
+  const id2 = card2.dataset.id;
+  const before = card2.parentNode;
+  await drag(win, card2, { x: 200, y: 6 });          /* the sticky bar, no drop zone */
+  ok('a drop outside every zone does NOT move the card', card2.parentNode === before);
+
+  const card3 = doc.getElementById('pool').children[0];
+  const p3 = card3.parentNode;
+  const c3 = centre(card3);
+  await drag(win, card3, { x: c3.x + 3, y: c3.y + 2 }, 2);   /* under the 8px threshold */
+  ok('a press under the threshold is not a drag', card3.parentNode === p3);
+
+  const aRow = doc.querySelector('.drop[data-tier="A"]');
+  const card4 = doc.getElementById('pool').children[0];
+  await drag(win, card4, centre(aRow));
+  const inA = aRow.contains(card4);
+  ok('control: a real drop into A still works after the failures above', inA);
+
+  head('cost at 390x844');
+  const frames = await win.eval ? null : null;
+  const t = await measure(win, doc);
+  ok('drag frame budget under 16.7ms', t.avg < 16.7, 'avg ' + t.avg.toFixed(2) + 'ms over ' + t.n + ' frames, worst ' + t.max.toFixed(1) + 'ms');
+
+  lines.push('<h2>' + (fails ? fails + ' FAILED' : 'all passed') + '</h2>');
+  out.innerHTML = lines.join('');
+  document.title = fails ? 'FAIL' : 'PASS';
+}
+
+function measure(win, doc) {
+  return new Promise(resolve => {
+    const card = doc.querySelector('#pool .card');
+    const a = centre(card);
+    const times = [];
+    let last = performance.now(), i = 0;
+    fire(win, card, 'pointerdown', a.x, a.y);
+    function step(now) {
+      times.push(now - last); last = now;
+      i++;
+      fire(win, card, 'pointermove', a.x + Math.sin(i / 6) * 120, a.y + Math.cos(i / 9) * 220);
+      if (i < 60) requestAnimationFrame(step);
+      else {
+        fire(win, card, 'pointerup', a.x, a.y);
+        const n = times.slice(2);
+        resolve({ avg: n.reduce((s, v) => s + v, 0) / n.length, max: Math.max(...n), n: n.length });
+      }
+    }
+    requestAnimationFrame(step);
+  });
+}
+
+run().catch(e => { out.innerHTML += '<div class="fail">harness threw: ' + e.message + '</div>'; document.title = 'FAIL'; });
+</script>
+</body>
+</html>

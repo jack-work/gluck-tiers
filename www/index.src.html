@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>tiers</title>
+<!-- zanni:fontpack -->
+<!-- zanni:gesso -->
+<!-- zanni:phosphor -->
+<!-- zanni:boil -->
+<!-- zanni:heft -->
+<style>
+/* gluck-tiers board. Reasoning lives in doc/board.md. */
+
+:root {
+  --card-w: 76px;
+  --card-h: 76px;
+  --gap: 6px;
+  --row-min: 86px;
+}
+
+* , *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body { min-height: 100%; }
+
+body {
+  font-family: var(--fontpack-prose, Georgia, serif);
+  padding-bottom: env(safe-area-inset-bottom);
+  overscroll-behavior-y: contain;
+}
+
+/* ── bar ─────────────────────────────────────────────────────────────── */
+
+.bar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 8px 10px;
+  background: var(--stage); color: var(--stage-ink);
+  border-bottom: 1px solid var(--rule);
+}
+
+.title {
+  font-family: var(--fontpack-display, Georgia, serif);
+  font-size: 19px; font-weight: 400; letter-spacing: 0.02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.bar-right { display: flex; align-items: center; gap: 10px; flex: none; }
+
+.saved {
+  font-family: var(--fontpack-mono, ui-monospace, monospace);
+  font-size: 11px; color: var(--stage-muted); min-width: 5ch; text-align: right;
+}
+
+.btn {
+  font: inherit; font-family: var(--fontpack-mono, ui-monospace, monospace);
+  font-size: 12px; padding: 5px 9px;
+  background: var(--stage-2); color: var(--stage-ink);
+  border: 1px solid var(--rule); cursor: pointer;
+}
+
+/* ── rows ────────────────────────────────────────────────────────────── */
+
+.board { padding: 8px 8px 0; display: flex; flex-direction: column; gap: 8px; }
+
+.row {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  align-items: stretch;
+  border: 1px solid var(--rule);
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.row-head {
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--fontpack-display, Georgia, serif);
+  font-size: 24px; line-height: 1;
+  color: var(--paper); background: var(--tier-bg, var(--muted));
+  border-right: 1px solid var(--rule);
+  user-select: none;
+}
+
+.drop {
+  min-height: var(--row-min);
+  display: flex; flex-wrap: wrap; align-content: flex-start;
+  gap: var(--gap); padding: var(--gap);
+}
+
+.drop.over { background: rgba(162, 118, 42, 0.22); outline: 1px dashed var(--gold); outline-offset: -2px; }
+
+/* ── pool ────────────────────────────────────────────────────────────── */
+
+.pool-wrap { padding: 10px 8px 24px; }
+
+.pool-head {
+  font-family: var(--fontpack-mono, ui-monospace, monospace);
+  font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 6px;
+}
+
+.count { color: var(--gold); }
+
+.pool { border: 1px dashed var(--rule); background: rgba(255, 255, 255, 0.12); }
+
+/* ── card ────────────────────────────────────────────────────────────── */
+
+.card {
+  width: var(--card-w);
+  display: flex; flex-direction: column;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  position: relative;
+}
+
+.thumb-wrap { display: block; width: 100%; aspect-ratio: 1; overflow: hidden; background: var(--stage-2); }
+
+.thumb {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  pointer-events: none;
+}
+
+/* A card with no image is a text chip, never a broken image icon. */
+.card.no-img .thumb-wrap { display: none; }
+.card.no-img .chip {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; aspect-ratio: 1; padding: 4px;
+  font-family: var(--fontpack-display, Georgia, serif);
+  font-size: 22px; color: var(--paper); background: var(--oxblood);
+}
+.card .chip { display: none; }
+
+.lines { display: block; padding: 3px 4px 4px; min-width: 0; }
+
+.name, .sub {
+  display: block; font-size: 10px; line-height: 1.2;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.name { color: var(--ink); }
+.sub { color: var(--muted); font-size: 9px; }
+
+.card.held { box-shadow: 0 6px 18px rgba(26, 13, 15, 0.45); }
+
+/* Desktop gets more room, so the cards grow rather than the layout changing. */
+@media (min-width: 720px) {
+  :root { --card-w: 104px; --row-min: 118px; --gap: 8px; }
+  .row { grid-template-columns: 64px 1fr; }
+  .row-head { font-size: 34px; }
+  .name, .sub { font-size: 11px; }
+  .title { font-size: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drop.over { outline-style: solid; }
+}
+</style>
+</head>
+<body class="gesso">
+
+<header class="bar phosphor">
+  <h1 class="title boil-text boil-fine" id="title">tiers</h1>
+  <div class="bar-right">
+    <span class="saved" id="saved" aria-live="polite"></span>
+    <button class="btn" id="reset" type="button">reset</button>
+  </div>
+</header>
+
+<main class="board" id="board">
+  <!-- rows are rendered from the list's own tiers, not hardcoded -->
+</main>
+
+<section class="pool-wrap heft-lift">
+  <h2 class="pool-head boil-text">unranked <span class="count" id="poolcount"></span></h2>
+  <div class="drop pool" id="pool" data-tier=""></div>
+</section>
+
+<template id="card-tpl">
+  <article class="card heft" draggable="false">
+    <span class="thumb-wrap"><img class="thumb" alt="" loading="lazy" decoding="async"></span>
+    <span class="chip"></span>
+    <span class="lines">
+      <span class="name"></span>
+      <span class="sub"></span>
+    </span>
+  </article>
+</template>
+
+<script src="board.js"></script>
+</body>
+</html>
