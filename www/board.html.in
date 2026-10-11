@@ -150,6 +150,22 @@ body {
   .title { font-size: 24px; }
 }
 
+.picker { padding: 10px 10px 0; }
+.picker ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.picker a {
+  display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  padding: 9px 10px; text-decoration: none; color: var(--ink);
+  background: rgba(255, 255, 255, 0.2); border: 1px solid var(--rule);
+}
+.picker a:hover, .picker a:focus { background: rgba(162, 118, 42, 0.18); outline: none; }
+.picker .meta {
+  font-family: var(--fontpack-mono, ui-monospace, monospace);
+  font-size: 11px; color: var(--muted); white-space: nowrap;
+}
+.picker a[aria-current="page"] { border-color: var(--gold); }
+
+body.imported .saved { color: var(--gold-bright); }
+
 @media (prefers-reduced-motion: reduce) {
   .drop.over { outline-style: solid; }
 }
@@ -161,9 +177,17 @@ body {
   <h1 class="title boil-text boil-fine" id="title">tiers</h1>
   <div class="bar-right">
     <span class="saved" id="saved" aria-live="polite"></span>
+    <label class="btn" for="importfile">import</label>
+    <input id="importfile" type="file" accept=".json,.txt,.csv,text/*" hidden>
+    <button class="btn" id="lists" type="button" aria-expanded="false">lists</button>
     <button class="btn" id="reset" type="button">reset</button>
   </div>
 </header>
+
+<nav class="picker" id="picker" hidden>
+  <h2 class="pool-head">lists</h2>
+  <ul id="pickerlist"></ul>
+</nav>
 
 <main class="board" id="board">
   <!-- rows are rendered from the list's own tiers, not hardcoded -->

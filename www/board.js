@@ -12,8 +12,18 @@
   var SAVE_WAIT = 500;
 
   var qs = new URLSearchParams(location.search);
-  var slug = qs.get('list') || 'peak-millenial-optimism';
   var boilCards = qs.get('boil') === 'cards';
+
+  /* One template serves every list, so the slug comes from the URL. The path
+   * is authoritative; ?list= is kept for the fixture harness. Before the
+   * redirect off / resolves there is no slug, and the picker stands in. */
+  function slugFromLocation() {
+    var m = location.pathname.match(/^\/l\/([^\/?#]+)/);
+    if (m) return decodeURIComponent(m[1]);
+    return qs.get('list') || null;
+  }
+  var slug = slugFromLocation();
+  var imported = false;
 
   var board = document.getElementById('board');
   var pool = document.getElementById('pool');
@@ -58,6 +68,7 @@
   }
 
   function getSaved() {
+    if (imported || !slug) return Promise.resolve({});
     if (devMode) {
       try { return Promise.resolve(JSON.parse(localStorage.getItem('tiers:' + slug) || '{}')); }
       catch (_) { return Promise.resolve({}); }
@@ -68,6 +79,10 @@
   }
 
   function putSaved(assign) {
+    /* An imported list has no slug, so it has nowhere to be saved. That is
+     * doc/imports.md, not an oversight: the service's bucket key is read-only
+     * and an import stays in the browser. */
+    if (imported || !slug) return Promise.resolve('ephemeral');
     var body = JSON.stringify({ assign: assign });
     if (devMode) {
       try { localStorage.setItem('tiers:' + slug, body); } catch (_) {}
@@ -169,7 +184,8 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(function () {
       putSaved(currentAssign()).then(function (ok) {
-        savedEl.textContent = ok ? (devMode ? 'local' : 'saved') : 'failed';
+        savedEl.textContent = ok === 'ephemeral' ? 'not saved'
+                            : ok ? (devMode ? 'local' : 'saved') : 'failed';
       });
     }, SAVE_WAIT);
   }
@@ -270,15 +286,90 @@
     scheduleSave();
   });
 
+  /* ── the picker ────────────────────────────────────────────────────── */
+
+  function loadPicker() {
+    return fetch('/api/lists', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : { lists: [] }; })
+      .catch(function () { return { lists: [] }; })
+      .then(function (d) {
+        var ul = document.getElementById('pickerlist');
+        ul.textContent = '';
+        (d.lists || []).forEach(function (l) {
+          var li = document.createElement('li');
+          var a = document.createElement('a');
+          a.href = '/l/' + encodeURIComponent(l.slug);
+          if (l.slug === slug) a.setAttribute('aria-current', 'page');
+          var t = document.createElement('span');
+          t.textContent = l.title || l.slug;
+          var m = document.createElement('span');
+          m.className = 'meta';
+          m.textContent = (l.items == null ? '' : l.items + ' cards');
+          a.appendChild(t); a.appendChild(m); li.appendChild(a); ul.appendChild(li);
+        });
+        return (d.lists || []).length;
+      });
+  }
+
+  var pickerEl = document.getElementById('picker');
+  document.getElementById('lists').addEventListener('click', function () {
+    var show = pickerEl.hidden;
+    pickerEl.hidden = !show;
+    this.setAttribute('aria-expanded', String(show));
+    if (show) loadPicker();
+  });
+
+  /* ── import, which never leaves the browser ────────────────────────── */
+
+  document.getElementById('importfile').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    savedEl.textContent = 'parsing';
+    file.text().then(function (text) {
+      return fetch('/api/parse', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-Filename': file.name },
+        body: text
+      });
+    }).then(function (r) {
+      if (r.status === 404) throw new Error('this service has no /api/parse yet');
+      if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('parse ' + r.status)); });
+      return r.json();
+    }).then(function (l) {
+      imported = true;
+      slug = null;
+      document.body.classList.add('imported');
+      history.replaceState(null, '', location.pathname);
+      render(l, {});
+      savedEl.textContent = 'not saved';
+    }).catch(function (err) {
+      savedEl.textContent = 'failed';
+      board.textContent = 'could not import ' + file.name + ': ' + err.message;
+    });
+    e.target.value = '';
+  });
+
   /* ── start ─────────────────────────────────────────────────────────── */
 
-  getList().then(function (l) {
-    return getSaved().then(function (s) { render(l, (s && s.assign) || {}); });
-  }).then(function () {
-    if (devMode) savedEl.textContent = 'fixture';
-  }).catch(function (err) {
-    board.textContent = 'could not load ' + slug + ': ' + err.message;
-  });
+  if (!slug) {
+    /* No slug in the path: either / before its redirect resolves, or a direct
+     * visit. Show the picker rather than guessing at a list. */
+    pickerEl.hidden = false;
+    document.getElementById('lists').setAttribute('aria-expanded', 'true');
+    loadPicker().then(function (n) {
+      if (!n) board.textContent = 'no lists found';
+    });
+  } else {
+    getList().then(function (l) {
+      return getSaved().then(function (s) { render(l, (s && s.assign) || {}); });
+    }).then(function () {
+      if (devMode) savedEl.textContent = 'fixture';
+      loadPicker();
+    }).catch(function (err) {
+      board.textContent = 'could not load ' + slug + ': ' + err.message;
+    });
+  }
 
   window.__tiers = {
     assign: currentAssign,
