@@ -103,7 +103,7 @@ for payload, label in [
     ({"items": [{"name": "x", "img": "../../dad/" + VICTIM.split("/")[-1]}]},
      "a traversal-shaped key is refused"),
     ({"items": [{"name": "x", "img": "https://i.scdn.co/image/abc"}]},
-     "a remote url in an import is refused, so the router never fetches for a stranger"),
+     "a remote url in an import is refused: nothing fetches, ever"),
     ({"items": [{"name": "x", "img": "http://127.0.0.1:3900/files/" + VICTIM}]},
      "a loopback url in an import is refused"),
     ({"items": [{"name": "x", "img_url": VICTIM}]},

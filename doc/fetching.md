@@ -1,72 +1,92 @@
 ---
 name: fetching
-description: What this service is allowed to fetch, why provenance rather than url shape decides it, and the limits on size and redirects. Read before adding any server-side fetch or touching mirror.ingest.
+description: Why this service makes no outbound HTTP at all, the two ceilings on what a bucket input may name, and the cache window on mirrored assets. Read before adding any fetch, widening a key rule, or touching the /img route.
 ---
 
 # Fetching
 
-spain is the **house router**. On its loopback sit Garage on 3900, Authelia on
-9091 and lldap on 17170, and `spain:17170` resolves only through its own
-dnsmasq. A service on that box that fetches a url an attacker chose is an SSRF
-with the whole estate behind it, so the fetch path is fenced in three ways.
+**This service makes no outbound HTTP requests.** There is no url branch, no
+opener, no address guard, because there is nothing left to guard.
 
-## 1. Provenance, not url shape
+## Why the guard was deleted rather than fixed
 
-`mirror.ingest(..., allow_remote=)` is a statement about **where the input came
-from**, never about how the url looks.
+An earlier version resolved a hostname, refused loopback, private, link-local
+and reserved addresses, and refused redirects. El Inspector defeated it with a
+resolver that answered **public on the check and loopback on the connect**:
+`urllib` resolves again when it opens the socket, so the check and the
+operation asked about different moments. The shipped module fetched and cached
+a loopback sentinel.
 
-| input | remote fetch | why |
-|---|---|---|
-| bucket object under `tiers/`, admin-controlled | **allowed** | it is how the browser never touches Spotify's CDN. The cover is fetched once, server-side, and served content-addressed |
-| imported file, user-supplied | **never** | an uploaded list naming `img_url` would make the router fetch on a stranger's behalf. Images resolve only from hashes already mirrored, otherwise the card renders as a text chip |
+Literal loopback was correctly refused, which is what made the bypass real
+rather than theoretical: the guard worked, and still did not hold.
 
-A url that looks public is not evidence of anything: DNS is the attacker's to
-choose. The caller declares provenance because only the caller knows it.
+Repairing it needs the connection pinned to the validated address, which
+`urllib` does not offer. So the capability is gone, including the
+`allow_remote` parameter, because **a capability nobody may use is still a
+capability** and the next author will find a use for it.
 
-## 2. Address refusal, on the resolved address
-
-`assert_fetchable` resolves the host and refuses loopback, private,
-link-local, multicast, reserved and unspecified addresses, and any scheme that
-is not `http` or `https`.
-
-Verified, not reasoned:
-
-| url | result |
+| was | is |
 |---|---|
-| `http://127.0.0.1:3900/files` | blocked, Garage |
-| `http://localhost:9091/` | blocked, Authelia |
-| `http://192.168.2.1/` | blocked, the LAN |
-| `http://169.254.169.254/latest/meta-data/` | blocked, cloud metadata |
-| `http://[::1]:17170/` | blocked, lldap over v6 |
-| `http://spain:17170/` | blocked, resolves private through dnsmasq |
-| `file:///etc/passwd` | blocked, scheme |
-| `https://i.scdn.co/image/abc` | **allowed**, so the guard is not a wall |
+| `assert_fetchable`, `_NoRedirects`, `_OPENER` | deleted |
+| `allow_remote` parameter | deleted |
+| a url in any input | refused and counted |
 
-The last row matters as much as the others: a guard that refuses everything
-proves nothing about whether it discriminates.
+`test_boundary.py` asserts the absence **by AST**, not by grep: it walks each
+module for a network import or a `urlopen` call. A first attempt grepped the
+source text and failed on the comment explaining why urllib was removed, which
+is an instrument reporting on itself. The AST check also negative-controls
+itself, and deliberately does **not** flag `urllib.parse`, which is a string
+parser the origin check needs. A check that forbids too much is one somebody
+relaxes carelessly later.
 
-## 3. Redirects are refused outright
+## The consequence, stated rather than discovered
 
-A redirect is a **second url, and the second one was never checked**.
-Validating the first host and then following a 302 to `127.0.0.1` is the
-standard way such a guard is defeated, so the opener raises on any redirect
-rather than re-validating. A 302 from a CDN is rare; being wrong here is not
-recoverable.
+The `.txt` fixture names remote `i.scdn.co` covers, so **those cards now render
+as text chips**. That is correct and acceptable:
 
-## Size
+- the `.json` wins by suffix precedence for the same slug, and it carries
+  bucket keys
+- mirroring covers into the bucket is the **refill step's** job, which runs on
+  a workstation, not on the house router
 
-| limit | value | why |
+Fetching 61 covers is a workstation's work. spain is the router.
+
+## Two ceilings on a bucket input
+
+An admin-controlled input may name a bucket key, and only within these:
+
+| ceiling | rule | why |
 |---|---|---|
-| one image | 8 MiB | reads one byte past the cap and refuses, rather than trusting `Content-Length`, which the server chooses |
+| **prefix** | the key must sit under `TIERS_PREFIX` after normalisation, with no leading slash, no backslash and no traversal | the service's Garage grant is per **bucket**, not per prefix, so an unconstrained key meant every object in `files` |
+| **content** | the bytes must sniff as jpeg, png, gif or webp | an earlier `_ext` returned `.bin` for unknown magic, so any object was mirrored and served as `application/octet-stream` |
 
-A 15 GB box that is also the house router cannot afford a forgiving parser or
-an unbounded read.
+Both refusals are loud and counted, in the same shape as an import's: the card
+renders as a visible text chip and the reason names the rule.
 
-## Known limit, written down rather than implied
+There is no `.bin` fallback and `Content-Type` comes from the **sniffed magic**,
+never from the key's extension, because the key is chosen by whoever wrote the
+input file.
 
-This checks the address at resolution time, so a hostile DNS server could
-answer public once and private on the connect that follows. Defeating that
-needs the connection pinned to the validated address, which `urllib` does not
-offer. The exposure is small because the only remote urls reaching this path
-come from an admin-controlled bucket object, and it is recorded here so nobody
-later reads this file as a promise it does not make.
+## The cache window on `/img/<sha256>`
+
+```
+private, max-age=3600
+```
+
+Not `public`, not a year, not `immutable`.
+
+A content-addressed path is a **capability URL**: whoever holds it holds the
+bytes, with no expiry, no revocation and no audit. It leaks nothing today
+because every route is gated, but two consequences stood out:
+
+- deleting a source list did not unpublish its cached assets
+- **a hash is not an authorization policy**
+
+The bytes remain immutable per hash, so correctness is unaffected. Only the
+publication window shrinks.
+
+## What an import may name
+
+Nothing on this page. An imported list resolves images **only** to a hash
+already in the mirror, so it can reuse a cover an admin-controlled input
+brought in and reach nothing else. See `doc/imports.md`.

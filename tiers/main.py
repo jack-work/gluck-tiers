@@ -180,9 +180,9 @@ def load_list(slug):
     parsed = parse.parse(raw, hint=pathlib.Path(key).suffix)
     # Stated rather than defaulted. A bucket object is admin-controlled, so it
     # may name keys and may be fetched from; doc/fetching.md.
-    items, errors = images().ingest_list(
-        parsed["items"], s3=s3, allow_remote=True, allow_keys=True
-    )
+    # A bucket object is admin-controlled, so it may name keys, but only keys
+    # under the prefix and only objects whose bytes are images. doc/fetching.md.
+    items, errors = images().ingest_list(parsed["items"], s3=s3, allow_keys=True)
     for e in errors:
         log.error("image unresolved id=%s source=%s: %s", e["id"], e["source"], e["error"])
     for w in parsed.get("warnings", []):
@@ -320,8 +320,19 @@ def img(sha):
     path = images().path_for(sha)
     if not path:
         return jsonify(error="unknown image"), 404
-    resp = send_file(path)
-    resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    # Content type from the SNIFFED magic, stored as the file's extension.
+    # Never octet-stream: serving unknown bytes was half of how any object in
+    # the bucket became downloadable.
+    ctype = mirror.CONTENT_TYPE_BY_EXT.get(path.suffix)
+    if not ctype:
+        log.error("mirrored file %s has no known image type", path.name)
+        return jsonify(error="unknown image"), 404
+    resp = send_file(path, mimetype=ctype)
+    # NOT public, NOT immutable, NOT a year. Deleting a source list must not
+    # leave its assets published, and a hash is not an authorization policy:
+    # whoever holds the url holds the bytes for as long as the cache lives.
+    # The bytes are still immutable per hash, so only the window shrinks.
+    resp.headers["Cache-Control"] = "private, max-age=3600"
     return resp
 
 
@@ -404,9 +415,7 @@ def api_import():
             error=f"{len(parsed['items'])} items exceeds the limit of {MAX_IMPORT_ITEMS}"
         ), 413
 
-    items, errors = images().ingest_list(
-        parsed["items"], allow_remote=False, allow_keys=False
-    )
+    items, errors = images().ingest_list(parsed["items"], allow_keys=False)
     for e in errors:
         log.info("import refused an image for %s: %s", user, e["error"])
     return jsonify(

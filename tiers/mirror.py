@@ -8,15 +8,11 @@ Two rules from doc/cards.md:
 
 import configparser
 import hashlib
-import ipaddress
+import posixpath
 import re
 import json
 import os
 import pathlib
-import socket
-import urllib.error
-import urllib.parse
-import urllib.request
 
 import boto3
 from botocore.config import Config
@@ -25,25 +21,22 @@ BUCKET = os.environ.get("TIERS_BUCKET", "files")
 PREFIX = os.environ.get("TIERS_PREFIX", "tiers/")
 ENDPOINT = os.environ.get("TIERS_S3_ENDPOINT", "http://127.0.0.1:3900")
 REGION = os.environ.get("TIERS_S3_REGION", "spain")
+# Only real images. There is deliberately NO fallback: an unknown magic is a
+# refusal, because a ".bin" default made the mirror serve any object in the
+# bucket as application/octet-stream with a year of cache on it.
 EXT_BY_MAGIC = [
-    (b"\xff\xd8\xff", ".jpg"),
-    (b"\x89PNG\r\n\x1a\n", ".png"),
-    (b"RIFF", ".webp"),
-    (b"GIF8", ".gif"),
+    (b"\xff\xd8\xff", ".jpg", "image/jpeg"),
+    (b"\x89PNG\r\n\x1a\n", ".png", "image/png"),
+    (b"GIF87a", ".gif", "image/gif"),
+    (b"GIF89a", ".gif", "image/gif"),
 ]
+CONTENT_TYPE_BY_EXT = {
+    ".jpg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+}
 
 
 class MissingObject(Exception):
     """A key or URL named by the input resolved to nothing."""
-
-
-class BlockedAddress(Exception):
-    """A url resolved somewhere this process must never fetch.
-
-    spain is the house router. Loopback there holds Garage on 3900, Authelia
-    on 9091 and lldap on 17170, so a fetch of an attacker-named url is an SSRF
-    with the whole estate behind it.
-    """
 
 
 class CredentialError(Exception):
@@ -130,51 +123,46 @@ def get_object(key, s3=None):
         raise
 
 
-class _NoRedirects(urllib.request.HTTPRedirectHandler):
-    """A redirect is a second url, and the second one was never checked.
+# THERE IS NO REMOTE FETCH. Deleted rather than repaired.
+#
+# assert_fetchable resolved a host, checked the address, and then urllib
+# resolved AGAIN to connect. A resolver answering public once and loopback on
+# the second lookup defeated it, and the shipped module fetched and cached a
+# loopback sentinel. Check-then-connect asks about a different moment than the
+# one that matters, which is the whole subject of docs/deploying.md.
+#
+# A capability nobody may use is still a capability, so the parameter is gone
+# too. This service makes NO outbound HTTP at all, and test_api asserts that
+# no urlopen reappears in the serving path.
 
-    Validating the first host and then following a 302 to 127.0.0.1 is the
-    classic way an SSRF guard is defeated, so redirects are refused outright.
+
+def sniff(blob):
+    """Return (ext, content_type) for a real image, or (None, None).
+
+    Sniffed from the BYTES, never from the key's extension, because the key is
+    chosen by whoever wrote the input file.
     """
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise BlockedAddress(f"redirect refused: {req.full_url} -> {newurl}")
-
-
-_OPENER = urllib.request.build_opener(_NoRedirects)
-
-
-def assert_fetchable(url):
-    """Refuse anything that is not public http(s). Raises BlockedAddress."""
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme not in ("http", "https"):
-        raise BlockedAddress(f"scheme not allowed: {parts.scheme or 'none'}")
-    host = parts.hostname
-    if not host:
-        raise BlockedAddress(f"no host in url: {url!r}")
-    try:
-        infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme == "https" else 80))
-    except socket.gaierror as e:
-        raise BlockedAddress(f"{host} does not resolve: {e}") from e
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if (
-            ip.is_loopback
-            or ip.is_private
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
-            raise BlockedAddress(f"{host} resolves to {ip}, which is not public")
-    return True
-
-
-def _ext(blob):
-    for magic, ext in EXT_BY_MAGIC:
+    for magic, ext, ctype in EXT_BY_MAGIC:
         if blob.startswith(magic):
-            return ext
-    return ".bin"
+            return ext, ctype
+    if blob[:4] == b"RIFF" and blob[8:12] == b"WEBP":
+        return ".webp", "image/webp"
+    return None, None
+
+
+def key_is_legal(key):
+    """An img key must sit under TIERS_PREFIX, after normalisation.
+
+    The prefix was only ever used to FIND input files. Nothing constrained an
+    img value, and the service's Garage grant is per BUCKET rather than per
+    prefix, so "any key" meant every object in the files bucket.
+    """
+    if not key or key.startswith("/") or "\\" in key:
+        return False
+    normal = posixpath.normpath(key)
+    if normal != key.rstrip("/") or normal.startswith(("..", "/")):
+        return False
+    return normal.startswith(PREFIX)
 
 
 class Mirror:
@@ -228,20 +216,26 @@ class Mirror:
             raise MissingObject(f"{sha} is not in the mirror")
         return sha
 
-    def ingest(self, source, s3=None, timeout=15, *, allow_remote, allow_keys):
-        """Return the sha256 for one image source, fetching it at most once.
+    def ingest(self, source, s3=None, *, allow_keys):
+        """Return the sha256 for one image source, reading it at most once.
 
-        allow_remote is the PROVENANCE of the input, not a property of the
-        url. A bucket object is admin-controlled, so a remote fetch is
-        intended: it is how the browser never touches Spotify's CDN. An
-        IMPORTED file is user-supplied, so no fetch may happen at all, and an
-        image resolves only if its bytes are already mirrored. doc/imports.md.
+        allow_keys is the PROVENANCE of the input, not a property of the
+        source string.
+
+        | input | may resolve |
+        |---|---|
+        | bucket object under the prefix, admin-controlled | a prefix-legal key, or an already-mirrored hash |
+        | imported file, user-supplied | an already-mirrored hash, nothing else |
+
+        Three things can never resolve from either: a key outside the prefix,
+        an object whose bytes are not an image, and any url at all.
+        doc/imports.md and doc/fetching.md.
         """
         if not source:
             return None
-        # Neither flag is defaulted, so no call site can inherit permission
-        # it never asked for. A default is a decision nobody re-reads.
-        if not allow_remote and not allow_keys:
+        # Not defaulted, so no call site can inherit permission it never asked
+        # for. A default is a decision nobody re-reads.
+        if not allow_keys:
             return self.already_mirrored(source)
 
         if source in self.index:
@@ -250,36 +244,27 @@ class Mirror:
                 return sha
 
         if source.startswith(("http://", "https://")):
-            if not allow_remote:
-                raise MissingObject(
-                    f"remote images are not fetched for imported lists: {source}"
-                )
-            assert_fetchable(source)
-            req = urllib.request.Request(source, headers={"User-Agent": "gluck-tiers"})
-            try:
-                with _OPENER.open(req, timeout=timeout) as r:
-                    blob = r.read(self.MAX_IMAGE_BYTES + 1)
-            except BlockedAddress:
-                raise
-            except Exception as e:
-                raise MissingObject(f"{source} could not be fetched: {e}") from e
-            if len(blob) > self.MAX_IMAGE_BYTES:
-                raise MissingObject(
-                    f"{source} exceeds {self.MAX_IMAGE_BYTES} bytes, refused"
-                )
+            raise MissingObject(
+                f"remote images are not fetched by this service: {source}"
+            )
         else:
-            if not allow_keys:
+            if not key_is_legal(source):
                 raise MissingObject(
-                    f"this input may not name a bucket key: {source!r}"
+                    f"key {source!r} is outside the {PREFIX} prefix, refused"
                 )
             blob = get_object(source, s3=s3)
 
         if not blob:
             raise MissingObject(f"{source} returned no bytes")
 
+        ext, _ctype = sniff(blob)
+        if ext is None:
+            raise MissingObject(
+                f"{source} is not an image: no recognised magic in its first bytes"
+            )
         sha = hashlib.sha256(blob).hexdigest()
         if not self.path_for(sha):
-            target = self.dir / (sha + _ext(blob))
+            target = self.dir / (sha + ext)
             tmp = target.with_suffix(target.suffix + ".tmp")
             tmp.write_bytes(blob)
             tmp.replace(target)
@@ -287,7 +272,7 @@ class Mirror:
         self._save_index()
         return sha
 
-    def ingest_list(self, items, s3=None, *, allow_remote, allow_keys):
+    def ingest_list(self, items, s3=None, *, allow_keys):
         """Mirror every image in a parsed list.
 
         Returns (items, errors). An item whose image cannot be resolved gets
@@ -306,11 +291,9 @@ class Mirror:
             card["img"] = None
             if source:
                 try:
-                    sha = self.ingest(
-                        source, s3=s3, allow_remote=allow_remote, allow_keys=allow_keys
-                    )
+                    sha = self.ingest(source, s3=s3, allow_keys=allow_keys)
                     card["img"] = f"/img/{sha}" if sha else None
-                except (MissingObject, BlockedAddress) as e:
+                except MissingObject as e:
                     errors.append({"id": card.get("id"), "source": source, "error": str(e)})
             out.append(card)
         return out, errors

@@ -89,7 +89,8 @@ sha = d["items"][0]["img"].rsplit("/", 1)[1]
 r = c.get(f"/img/{sha}", headers=USER)
 check("image serves 200", r.status_code == 200)
 check("image has bytes", len(r.data) > 1000)
-check("image is immutable-cached", "immutable" in r.headers.get("Cache-Control", ""))
+check("image cache is private and an hour, not public for a year",
+      r.headers["Cache-Control"] == "private, max-age=3600")
 check("bogus sha is 404", c.get("/img/" + "b" * 64, headers=USER).status_code == 404)
 check("non-sha path is 404", c.get("/img/not-a-sha", headers=USER).status_code == 404)
 check("unknown slug is 404", c.get("/api/list/nope", headers=USER).status_code == 404)
@@ -153,33 +154,39 @@ check(
 )
 _os.environ.pop("TIERS_DEFAULT_SLUG")
 
-# ── the router is not a fetch proxy ─────────────────────────────────
-import mirror as _m
-for blocked in ("http://127.0.0.1:3900/files", "http://localhost:9091/",
-                "http://192.168.2.1/", "http://169.254.169.254/latest/meta-data/",
-                "file:///etc/passwd", "http://[::1]:17170/"):
-    try:
-        _m.assert_fetchable(blocked)
-        raise AssertionError(f"ssrf: {blocked} was ALLOWED")
-    except _m.BlockedAddress:
-        pass
-check("ssrf: loopback, private, link-local and non-http are all refused", True)
-check("ssrf: a real public CDN host is still allowed, so the guard is not a wall",
-      _m.assert_fetchable("https://i.scdn.co/image/abc") is True)
+# ── the router is not a fetch proxy, and no longer can be ───────────
+# The address guard is GONE because on-demand remote fetching is gone: DNS
+# rebinding defeated check-then-connect. The standing proof of all four
+# boundary properties lives in test_boundary.py, which fires real keys at the
+# real bucket. Here we only assert the capability is absent.
+import mirror as _m  # noqa: E402
+
+check("assert_fetchable is gone, not merely unused", not hasattr(_m, "assert_fetchable"))
+check("the no-redirect opener is gone too", not hasattr(_m, "_OPENER"))
 _prov = _m.Mirror("/tmp/tiers-prov")
 try:
-    _prov.ingest("https://i.scdn.co/image/abc", allow_remote=False, allow_keys=False)
-    raise AssertionError("provenance: an imported list was allowed to fetch")
+    _prov.ingest("https://i.scdn.co/image/abc", allow_keys=True)
+    raise AssertionError("a url was fetched")
 except _m.MissingObject as e:
-    check("provenance: an imported list may not fetch remote images", "mirrored" in str(e))
+    check("even an admin-controlled input may not name a url", "not fetched" in str(e))
 try:
-    _prov.ingest("https://i.scdn.co/image/abc", allow_remote=False)
+    _prov.ingest("dad/anything.pdf", allow_keys=True)
+    raise AssertionError("a key outside the prefix was read")
+except _m.MissingObject as e:
+    check("an admin input may not name a key outside the prefix", "outside the" in str(e))
+try:
+    _prov.ingest("tiers/img/abc.jpg")
     raise AssertionError("a call site omitted allow_keys and was allowed to")
 except TypeError as e:
     check(
-        "permission cannot be inherited: omitting a flag is a TypeError, not a default",
+        "permission cannot be inherited: omitting allow_keys is a TypeError",
         "allow_keys" in str(e),
     )
+check("the sniffer refuses non-images", _m.sniff(b"%PDF-1.4") == (None, None))
+check("and accepts a jpeg", _m.sniff(b"\xff\xd8\xff\xe0rest")[1] == "image/jpeg")
+check("a legal key passes the prefix ceiling", _m.key_is_legal("tiers/img/a.jpg"))
+for bad in ("dad/x.pdf", "/tiers/img/a.jpg", "tiers/../dad/x.pdf", "", "tiers"):
+    check(f"the prefix ceiling refuses {bad!r}", not _m.key_is_legal(bad))
 
 # ── cross-site writes, which were free until tonight ────────────────
 check(
