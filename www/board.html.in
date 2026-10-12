@@ -43,6 +43,9 @@ body {
   font-family: var(--fontpack-display, Georgia, serif);
   font-size: 19px; font-weight: 400; letter-spacing: 0.02em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* A nowrap flex item will not shrink below its text without this, so the
+   * title pushed the controls off the right edge of a 390px phone. */
+  flex: 1 1 auto; min-width: 0;
 }
 
 .bar-right { display: flex; align-items: center; gap: 10px; flex: none; }
@@ -173,7 +176,7 @@ body.imported .saved { color: var(--gold-bright); }
 </head>
 <body class="gesso">
 
-<header class="bar phosphor">
+<header class="bar phosphor-host">
   <h1 class="title boil-text boil-fine" id="title">tiers</h1>
   <div class="bar-right">
     <span class="saved" id="saved" aria-live="polite"></span>
