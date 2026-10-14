@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    gluck-service-lib.url = "github:jack-work/gluck-service-lib";
+    gluck-service-lib.url = "github:jack-work/gluck-service-lib/09c232a04f956c6c941898c43dade1a34f98e0e8";
     gluck-service-lib.inputs.nixpkgs.follows = "nixpkgs";
     zanni.url = "github:jack-work/zanni";
     zanni.inputs.nixpkgs.follows = "nixpkgs";
@@ -113,7 +113,7 @@ print('packaging ok: every entrypoint import resolves inside the shipped tree')
             inherit config lib pkgs;
             name = "gluck-tiers";
             subdomain = "tiers";
-            port = 9104;
+            socket = true;
             entrypoint = "${app}/main.py";
             pythonPackages = ps: with ps; [ flask waitress boto3 ];
             stateDirectory = "gluck-tiers";
@@ -160,6 +160,28 @@ print('packaging ok: every entrypoint import resolves inside the shipped tree')
         in
         {
           app = mkApp pkgs;
+
+          socket = pkgs.runCommand "gluck-tiers-socket" {
+            SOCKET_CASES = builtins.toJSON [
+              {
+                name = "tiers";
+                entry = "${mkApp pkgs}/main.py";
+                port = 29104;
+                env = {
+                  TIERS_STATE = "@TMP@/state";
+                  TIERS_TEMPLATES = "${mkApp pkgs}/templates";
+                  TIERS_S3_ENDPOINT = "http://127.0.0.1:1";
+                };
+                path = "/api/status";
+                anonymous = 401;
+                believed = 200;
+              }
+            ];
+          } ''
+            set -o pipefail
+            export SOCKET_ACTIVATE=${pkgs.systemd}/bin/systemd-socket-activate
+            ${py}/bin/python -u ${./tests/test_socket.py} 2>&1 | tee $out
+          '';
 
           # The negative control, kept rather than performed once. It ships
           # the tree MINUS one module and asserts the import FAILS. If this

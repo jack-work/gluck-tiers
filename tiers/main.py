@@ -8,6 +8,8 @@ import json
 import logging
 import os
 import pathlib
+import socket
+import sys
 import threading
 from urllib.parse import urlsplit
 
@@ -461,13 +463,26 @@ def status():
     )
 
 
+def inherited_sockets():
+    if os.environ.get("LISTEN_PID") != str(os.getpid()):
+        return []
+    return [socket.socket(fileno=3 + i) for i in range(int(os.environ.get("LISTEN_FDS", "0")))]
+
+
 def main():
     from waitress import serve
 
-    port = int(os.environ.get("PORT", "9099"))
     logging.basicConfig(level=logging.INFO)
-    log.info("gluck-tiers on 127.0.0.1:%s, state %s", port, STATE)
-    serve(app, host="127.0.0.1", port=port, threads=8)
+    sockets = inherited_sockets()
+    if sockets:
+        log.info("gluck-tiers on the inherited socket, state %s", STATE)
+        serve(app, sockets=sockets, threads=8)
+    elif os.environ.get("KWEB_LISTEN") == "socket":
+        sys.exit("no listening socket from systemd; refusing to fall back to TCP")
+    else:
+        port = int(os.environ.get("PORT", "9099"))
+        log.info("gluck-tiers on 127.0.0.1:%s, state %s", port, STATE)
+        serve(app, host="127.0.0.1", port=port, threads=8)
 
 
 if __name__ == "__main__":

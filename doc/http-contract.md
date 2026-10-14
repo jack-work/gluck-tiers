@@ -52,23 +52,19 @@ session as far as it knows.
 
 **The header is trustworthy only because Caddy is the only way in.** The
 service reads `Remote-User` for identity and `Remote-Groups` for admin, and
-checks neither against anything. So anything that reaches `127.0.0.1:9104`
-without passing through Caddy can claim to be anyone, including admin, by
-sending a header.
+checks neither against anything. So it listens on no port: systemd hands it
+`/run/kweb/gluck-tiers.sock` in a directory only Caddy's group can enter, and
+with `KWEB_LISTEN=socket` it refuses to start without that socket. No other
+process on spain, and no forward from a workstation, can reach it.
 
-That happened on 2026-10-10. `3893e0ee` left an `ssh -L 9104` forward and three
-local proxies that injected `Remote-Groups: gluck-tiers-admin` running on the
-workstation for two days, so every process there, every aria included, could
-act as Gluck with admin. Found by another aria, closed 2026-10-13.
+That was not always so. On 2026-10-10 it bound `127.0.0.1:9104`, and
+`3893e0ee` left an `ssh -L 9104` forward and three local proxies that injected
+`Remote-Groups: gluck-tiers-admin` running on the workstation for two days, so
+every process there, every aria included, could act as Gluck with admin.
+Found by another aria, closed 2026-10-13, and the class went with the port.
 
-| when you need the unit directly | do |
-|---|---|
-| a forward or a header-injecting proxy | start it in the same command that uses it, and kill it in that command too |
-| anything that must outlive one command | do not. Go through `https://tiers.kelliher.info` |
-
-Spain's own loopback carries the same trust: any process on the box can do
-what the forward did. That is the estate-wide `mkPythonService` model, shared
-with portero mint, and not something this service can fix alone.
+To call the unit directly, go through `https://tiers.kelliher.info`; there is
+nothing else to reach.
 
 ## Admin
 
