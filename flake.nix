@@ -52,6 +52,8 @@
             # the shipped unit died at import.
             TIERS_EXAMPLES=$PWD/examples PYTHONDONTWRITEBYTECODE=1 \
               ${py}/bin/python tiers/tests/test_parse.py
+            PYTHONDONTWRITEBYTECODE=1 \
+              ${py}/bin/python tiers/tests/test_scheme.py
 
             # The packaging check imports from $out ALONE, so it fails when a
             # module the entrypoint needs did not ship. doc/packaging.md holds

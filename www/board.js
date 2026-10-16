@@ -110,7 +110,7 @@
     var head = document.createElement('div');
     head.className = 'row-head boil-text';
     head.textContent = tier;
-    head.style.setProperty('--tier-bg', TIER_BG[tier] || 'var(--muted)');
+    head.style.setProperty('--tier-bg', TIER_BG[tier] || 'var(--z-muted)');
 
     var drop = document.createElement('div');
     drop.className = 'drop';

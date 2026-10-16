@@ -218,6 +218,16 @@ def default_slug(inv=None):
     return sorted(inv)[0] if inv else None
 
 
+SCHEMES = {"light", "dark"}
+
+
+def with_scheme(html):
+    scheme = request.cookies.get("zanni-scheme")
+    if scheme not in SCHEMES:
+        return html
+    return html.replace("<html", f'<html data-scheme="{scheme}"', 1)
+
+
 def _board_page():
     page = TEMPLATES / "board.html"
     if not page.exists():
@@ -281,7 +291,7 @@ def board(slug):
         known = True
     if not known:
         return jsonify(error=f"no such list: {slug}"), 404
-    return send_file(page)
+    return Response(with_scheme(page.read_text()), mimetype="text/html", headers={"Vary": "Cookie"})
 
 
 @app.get("/api/lists")

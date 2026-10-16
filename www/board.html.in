@@ -13,6 +13,7 @@
 /* gluck-tiers board. Reasoning lives in doc/board.md. */
 
 :root {
+  color-scheme: light dark;
   --card-w: 76px;
   --card-h: 76px;
   --gap: 6px;
@@ -36,7 +37,7 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 8px 10px;
   background: var(--stage); color: var(--stage-ink);
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--z-rule);
 }
 
 .title {
@@ -59,7 +60,7 @@ body {
   font: inherit; font-family: var(--fontpack-mono, ui-monospace, monospace);
   font-size: 12px; padding: 5px 9px;
   background: var(--stage-2); color: var(--stage-ink);
-  border: 1px solid var(--rule); cursor: pointer;
+  border: 1px solid var(--z-rule); cursor: pointer;
 }
 
 /* ── rows ────────────────────────────────────────────────────────────── */
@@ -70,16 +71,16 @@ body {
   display: grid;
   grid-template-columns: 46px 1fr;
   align-items: stretch;
-  border: 1px solid var(--rule);
-  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid var(--z-rule);
+  background: light-dark(rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.04));
 }
 
 .row-head {
   display: flex; align-items: center; justify-content: center;
   font-family: var(--fontpack-display, Georgia, serif);
   font-size: 24px; line-height: 1;
-  color: var(--paper); background: var(--tier-bg, var(--muted));
-  border-right: 1px solid var(--rule);
+  color: var(--paper); background: var(--tier-bg, var(--z-muted));
+  border-right: 1px solid var(--z-rule);
   user-select: none;
 }
 
@@ -98,20 +99,20 @@ body {
 .pool-head {
   font-family: var(--fontpack-mono, ui-monospace, monospace);
   font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--muted); margin-bottom: 6px;
+  color: var(--z-muted); margin-bottom: 6px;
 }
 
 .count { color: var(--gold); }
 
-.pool { border: 1px dashed var(--rule); background: rgba(255, 255, 255, 0.12); }
+.pool { border: 1px dashed var(--z-rule); background: light-dark(rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)); }
 
 /* ── card ────────────────────────────────────────────────────────────── */
 
 .card {
   width: var(--card-w);
   display: flex; flex-direction: column;
-  background: var(--paper-2);
-  border: 1px solid var(--rule);
+  background: var(--z-ground-2);
+  border: 1px solid var(--z-rule);
   position: relative;
 }
 
@@ -139,8 +140,8 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.name { color: var(--ink); }
-.sub { color: var(--muted); font-size: 9px; }
+.name { color: var(--z-ink); }
+.sub { color: var(--z-muted); font-size: 9px; }
 
 .card.held { box-shadow: 0 6px 18px rgba(26, 13, 15, 0.45); }
 
@@ -157,13 +158,13 @@ body {
 .picker ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
 .picker a {
   display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
-  padding: 9px 10px; text-decoration: none; color: var(--ink);
-  background: rgba(255, 255, 255, 0.2); border: 1px solid var(--rule);
+  padding: 9px 10px; text-decoration: none; color: var(--z-ink);
+  background: light-dark(rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.05)); border: 1px solid var(--z-rule);
 }
 .picker a:hover, .picker a:focus { background: rgba(162, 118, 42, 0.18); outline: none; }
 .picker .meta {
   font-family: var(--fontpack-mono, ui-monospace, monospace);
-  font-size: 11px; color: var(--muted); white-space: nowrap;
+  font-size: 11px; color: var(--z-muted); white-space: nowrap;
 }
 .picker a[aria-current="page"] { border-color: var(--gold); }
 
